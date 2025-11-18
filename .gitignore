@@ -1,0 +1,24 @@
+# Ignore everything by default
+*
+
+# Allow tools directory and its subdirectories
+!tools/
+!tools/*/
+!tools/*/**
+
+#Ignore all files in the tools directory
+tools/infolauncher/
+tools/infolauncher/*
+tools/infolauncher/*/
+tools/infolauncher/*/**
+
+# Allow this .gitignore file itself
+!.gitignore
+
+# Allow all files in the .github directory
+!.github/
+!.github/*/
+!.github/*/**
+
+# Ignore GitHub node_modules directory
+.github/scripts/node_modules/
