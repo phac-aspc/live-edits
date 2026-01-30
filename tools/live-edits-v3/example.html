@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Edits Example</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 20px;
+      line-height: 1.6;
+    }
+    .editable {
+      margin: 20px 0;
+      padding: 20px;
+      border: 2px dashed transparent;
+      transition: border-color 0.2s;
+    }
+    .editable:hover {
+      border-color: #3b82f6;
+    }
+  </style>
+</head>
+<body>
+  <h1>Live Edits Example Page</h1>
+  
+  <div class="editable">
+    <h2>Editable Section 1</h2>
+    <p>This entire section can be edited. Click "Enable Editing" in the toolbar above, then click on this section to start editing.</p>
+    <p>You can format text, add lists, and more using the formatting toolbar.</p>
+  </div>
+
+  <div class="editable">
+    <h2>Editable Section 2</h2>
+    <p>This is another editable section. Multiple sections can be edited independently.</p>
+    <ul>
+      <li>List items are editable too</li>
+      <li>Try editing this list</li>
+    </ul>
+  </div>
+
+  <div style="margin-top: 40px; padding: 20px; background: #f3f4f6; border-radius: 8px;">
+    <h3>Instructions</h3>
+    <ol>
+      <li>Enter your name in the toolbar</li>
+      <li>Click "Enable Editing"</li>
+      <li>Click on any section with <code>class="editable"</code></li>
+      <li>Use the formatting toolbar to format text</li>
+      <li>Click "Save Changes" when done</li>
+      <li>Add comments by clicking "Add Comment" then clicking anywhere</li>
+    </ol>
+  </div>
+
+  <!-- Socket.IO Client (required for real-time features) -->
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  
+  <!-- Live Edits Widget -->
+  <!-- Update the src path to match your widget location -->
+  <script src="/widget/editor.js"></script>
+</body>
+</html>
