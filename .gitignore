@@ -14,3 +14,46 @@ tools/infolauncher/*/**
 
 # Allow this .gitignore file itself
 !.gitignore
+
+# Dependencies (for tools that use Node.js)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build outputs
+dist/
+build/
+
+# Test coverage
+coverage/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
