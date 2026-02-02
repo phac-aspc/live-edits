@@ -14,11 +14,3 @@ tools/infolauncher/*/**
 
 # Allow this .gitignore file itself
 !.gitignore
-
-# Allow all files in the .github directory
-!.github/
-!.github/*/
-!.github/*/**
-
-# Ignore GitHub node_modules directory
-.github/scripts/node_modules/

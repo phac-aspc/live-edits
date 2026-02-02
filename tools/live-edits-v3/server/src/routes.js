@@ -90,6 +90,112 @@ export function setupRoutes(app, db) {
     }
   });
 
+  // Update project default_page
+  app.patch('/projects/:projectId/default-page', (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { default_page } = req.body;
+
+      // Validate projectId (UUID)
+      const projectIdValidation = validateUUID(projectId, 'projectId');
+      if (!projectIdValidation.valid) {
+        return res.status(400).json({ error: projectIdValidation.error });
+      }
+
+      // Validate default_page
+      if (!default_page || typeof default_page !== 'string') {
+        return res.status(400).json({ error: 'default_page is required and must be a string' });
+      }
+
+      // Ensure default_page starts with /
+      const normalizedPage = default_page.startsWith('/') ? default_page : '/' + default_page;
+
+      // Check if project exists
+      const getProject = db.prepare('SELECT * FROM projects WHERE id = ?');
+      const project = getProject.get(projectId);
+
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      // Update default_page
+      const update = db.prepare(`
+        UPDATE projects 
+        SET default_page = ?, updated_at = ?
+        WHERE id = ?
+      `);
+      update.run(normalizedPage, Date.now(), projectId);
+
+      // Return updated project
+      const updatedProject = getProject.get(projectId);
+      res.json(updatedProject);
+    } catch (error) {
+      const errorMessage = sanitizeError(error, 'Failed to update default page');
+      res.status(500).json({ error: errorMessage });
+    }
+  });
+
+  // Update project default_page by folder path
+  app.patch(/^\/projects\/path\/(.+)\/default-page$/, (req, res) => {
+    try {
+      let match = req.path.match(/^\/projects\/path\/(.+)\/default-page$/);
+      if (!match) {
+        match = req.url.match(/^\/projects\/path\/(.+)\/default-page$/);
+      }
+      if (!match && req.originalUrl) {
+        match = req.originalUrl.match(/^\/projects\/path\/(.+)\/default-page$/);
+      }
+      
+      if (!match || !match[1]) {
+        return res.status(400).json({ error: 'folder_path is required' });
+      }
+      
+      let folderPath = decodeURIComponent(match[1]);
+      // Normalize path
+      folderPath = folderPath.replace(/\.\./g, '');
+      folderPath = folderPath.replace(/[<>:"|?*\x00-\x1f]/g, '');
+      folderPath = folderPath.replace(/\\/g, '/');
+      folderPath = folderPath.replace(/\/+/g, '/');
+      folderPath = folderPath.replace(/^\/+|\/+$/g, '');
+      if (!folderPath.startsWith('/')) {
+        folderPath = '/' + folderPath;
+      }
+
+      const { default_page } = req.body;
+
+      // Validate default_page
+      if (!default_page || typeof default_page !== 'string') {
+        return res.status(400).json({ error: 'default_page is required and must be a string' });
+      }
+
+      // Ensure default_page starts with /
+      const normalizedPage = default_page.startsWith('/') ? default_page : '/' + default_page;
+
+      // Find project by folder path
+      const getProject = db.prepare('SELECT * FROM projects WHERE folder_path = ? OR folder_path = ?');
+      let project = getProject.get(folderPath, folderPath.startsWith('/') ? folderPath.slice(1) : '/' + folderPath);
+
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      // Update default_page
+      const update = db.prepare(`
+        UPDATE projects 
+        SET default_page = ?, updated_at = ?
+        WHERE id = ?
+      `);
+      update.run(normalizedPage, Date.now(), project.id);
+
+      // Return updated project
+      const updatedProject = getProject.get(project.id);
+      res.json(updatedProject);
+    } catch (error) {
+      const errorMessage = sanitizeError(error, 'Failed to update default page');
+      res.status(500).json({ error: errorMessage });
+    }
+  });
+
   // Get project by folder path (using regex to handle paths with slashes)
   // This route must come AFTER /projects (the list route) but BEFORE other routes
   app.get(/^\/projects\/(.+)$/, (req, res) => {
@@ -550,6 +656,214 @@ export function setupRoutes(app, db) {
     }
   });
 
+  // Delete project (and all related edits, comments, presence via CASCADE)
+  app.delete('/projects/:projectId', (req, res) => {
+    try {
+      const { projectId } = req.params;
+      
+      // Validate projectId (UUID)
+      const projectIdValidation = validateUUID(projectId, 'projectId');
+      if (!projectIdValidation.valid) {
+        return res.status(400).json({ error: projectIdValidation.error });
+      }
+
+      // First check if project exists
+      const getProject = db.prepare('SELECT * FROM projects WHERE id = ?');
+      const project = getProject.get(projectId);
+
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      // Delete project (CASCADE will delete related edits, comments, presence)
+      const deleteProject = db.prepare('DELETE FROM projects WHERE id = ?');
+      const result = deleteProject.run(projectId);
+
+      if (result.changes === 0) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      res.json({ 
+        success: true, 
+        message: 'Project and all related data deleted',
+        deletedProject: {
+          id: project.id,
+          name: project.name,
+          folder_path: project.folder_path
+        }
+      });
+    } catch (error) {
+      const errorMessage = sanitizeError(error, 'Failed to delete project');
+      res.status(500).json({ error: errorMessage });
+    }
+  });
+
+  // Delete project by folder path
+  app.delete(/^\/projects\/path\/(.+)$/, (req, res) => {
+    try {
+      let match = req.path.match(/^\/projects\/path\/(.+)$/);
+      if (!match) {
+        match = req.url.match(/^\/projects\/path\/(.+)$/);
+      }
+      if (!match && req.originalUrl) {
+        match = req.originalUrl.match(/^\/projects\/path\/(.+)$/);
+      }
+      
+      if (!match || !match[1]) {
+        return res.status(400).json({ error: 'folder_path is required' });
+      }
+      
+      let folderPath = decodeURIComponent(match[1]);
+      // Normalize path (same as GET route)
+      folderPath = folderPath.replace(/\.\./g, '');
+      folderPath = folderPath.replace(/[<>:"|?*\x00-\x1f]/g, '');
+      folderPath = folderPath.replace(/\\/g, '/');
+      folderPath = folderPath.replace(/\/+/g, '/');
+      folderPath = folderPath.replace(/^\/+|\/+$/g, '');
+      if (!folderPath.startsWith('/')) {
+        folderPath = '/' + folderPath;
+      }
+
+      // Find project by folder path
+      const getProject = db.prepare('SELECT * FROM projects WHERE folder_path = ? OR folder_path = ?');
+      let project = getProject.get(folderPath, folderPath.startsWith('/') ? folderPath.slice(1) : '/' + folderPath);
+
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      // Delete project (CASCADE will delete related data)
+      const deleteProject = db.prepare('DELETE FROM projects WHERE id = ?');
+      const result = deleteProject.run(project.id);
+
+      res.json({ 
+        success: true, 
+        message: 'Project and all related data deleted',
+        deletedProject: {
+          id: project.id,
+          name: project.name,
+          folder_path: project.folder_path
+        }
+      });
+    } catch (error) {
+      const errorMessage = sanitizeError(error, 'Failed to delete project');
+      res.status(500).json({ error: errorMessage });
+    }
+  });
+
+  // Delete edit by ID
+  app.delete('/edits/:editId', (req, res) => {
+    try {
+      const { editId } = req.params;
+      
+      // Validate editId (UUID)
+      const editIdValidation = validateUUID(editId, 'editId');
+      if (!editIdValidation.valid) {
+        return res.status(400).json({ error: editIdValidation.error });
+      }
+
+      // First check if edit exists
+      const getEdit = db.prepare('SELECT * FROM edits WHERE id = ?');
+      const edit = getEdit.get(editId);
+
+      if (!edit) {
+        return res.status(404).json({ error: 'Edit not found' });
+      }
+
+      const deleteEdit = db.prepare('DELETE FROM edits WHERE id = ?');
+      const result = deleteEdit.run(editId);
+
+      if (result.changes === 0) {
+        return res.status(404).json({ error: 'Edit not found' });
+      }
+
+      res.json({ 
+        success: true,
+        deletedEdit: {
+          id: edit.id,
+          project_id: edit.project_id,
+          page_path: edit.page_path
+        }
+      });
+    } catch (error) {
+      const errorMessage = sanitizeError(error, 'Failed to delete edit');
+      res.status(500).json({ error: errorMessage });
+    }
+  });
+
+  // Delete all edits for a specific page
+  app.delete(/^\/edits\/([^/]+)\/(.+)$/, (req, res) => {
+    try {
+      // Skip if this is a history, project, or by-id route
+      const pathToCheck = req.path || req.url || req.originalUrl || '';
+      if (pathToCheck.includes('/edits/history/') || 
+          pathToCheck.includes('/edits/project/') || 
+          pathToCheck.includes('/edits/by-id/')) {
+        return res.status(404).json({ error: 'Route not found' });
+      }
+      
+      let match = req.path.match(/^\/edits\/([^/]+)\/(.+)$/);
+      if (!match) {
+        match = req.url.match(/^\/edits\/([^/]+)\/(.+)$/);
+      }
+      if (!match && req.originalUrl) {
+        match = req.originalUrl.match(/^\/edits\/([^/]+)\/(.+)$/);
+      }
+      
+      if (!match || !match[1] || !match[2]) {
+        return res.status(400).json({ error: 'projectId and pagePath are required' });
+      }
+      
+      const projectId = match[1];
+      let decodedPagePath = decodeURIComponent(match[2]);
+      
+      // Validate projectId (UUID)
+      const projectIdValidation = validateUUID(projectId, 'projectId');
+      if (!projectIdValidation.valid) {
+        return res.status(400).json({ error: projectIdValidation.error });
+      }
+      
+      // Validate and sanitize page path
+      const pagePathValidation = validatePath(decodedPagePath, 'page_path');
+      if (!pagePathValidation.valid) {
+        return res.status(400).json({ error: pagePathValidation.error });
+      }
+      
+      decodedPagePath = pagePathValidation.sanitized;
+
+      // Delete all edits for this page
+      const deleteEdits = db.prepare('DELETE FROM edits WHERE project_id = ? AND page_path = ?');
+      const result = deleteEdits.run(projectId, decodedPagePath);
+
+      // Try without leading slash as fallback
+      if (result.changes === 0 && decodedPagePath.startsWith('/')) {
+        const resultAlt = deleteEdits.run(projectId, decodedPagePath.slice(1));
+        if (resultAlt.changes > 0) {
+          return res.json({ 
+            success: true, 
+            deletedCount: resultAlt.changes,
+            project_id: projectId,
+            page_path: decodedPagePath.slice(1)
+          });
+        }
+      }
+
+      if (result.changes === 0) {
+        return res.status(404).json({ error: 'No edits found for this page' });
+      }
+
+      res.json({ 
+        success: true, 
+        deletedCount: result.changes,
+        project_id: projectId,
+        page_path: decodedPagePath
+      });
+    } catch (error) {
+      const errorMessage = sanitizeError(error, 'Failed to delete edits');
+      res.status(500).json({ error: errorMessage });
+    }
+  });
+
   // Get presence (active users) for a page (using regex to handle page paths with slashes)
   app.get(/^\/presence\/([^/]+)\/(.+)$/, (req, res) => {
     try {
@@ -590,6 +904,89 @@ export function setupRoutes(app, db) {
       res.json(presence);
     } catch (error) {
       const errorMessage = sanitizeError(error, 'Failed to get presence');
+      res.status(500).json({ error: errorMessage });
+    }
+  });
+
+  // Create product from template - only creates database entry
+  // File operations (setup-product.js) must be run on AWSC9, not on the Azure server
+  app.post('/api/create-product-from-template', async (req, res) => {
+    try {
+      const { template, productName } = req.body;
+
+      // Validate input
+      if (!template || !productName) {
+        return res.status(400).json({ error: 'Template name and product name are required' });
+      }
+
+      // Validate product name - trim and clean first
+      const cleanedProductName = productName.trim().replace(/[\s\u00A0\u2000-\u200B\u2028\u2029]/g, '');
+      if (!cleanedProductName) {
+        return res.status(400).json({ error: 'Product name cannot be empty' });
+      }
+      
+      // More permissive validation - allow letters, numbers, dashes, and underscores
+      if (!/^[a-zA-Z0-9_-]+$/.test(cleanedProductName)) {
+        console.error('Invalid product name received:', {
+          original: productName,
+          cleaned: cleanedProductName,
+          length: cleanedProductName.length,
+          charCodes: Array.from(cleanedProductName).map(c => c.charCodeAt(0))
+        });
+        return res.status(400).json({ 
+          error: 'Product name can only contain letters, numbers, dashes, and underscores',
+          received: cleanedProductName
+        });
+      }
+      
+      // Use cleaned product name
+      const finalProductName = cleanedProductName;
+      const folderPath = `/_live-edits/products/${finalProductName}`;
+
+      // Check if product already exists in database
+      const getProject = db.prepare('SELECT * FROM projects WHERE folder_path = ? OR folder_path = ?');
+      let project = getProject.get(folderPath, folderPath.substring(1));
+
+      if (project) {
+        // Product already registered, return existing
+        console.log('Product already exists in database:', project.id);
+        res.json({
+          success: true,
+          productName: finalProductName,
+          folderPath: folderPath,
+          projectId: project.id,
+          message: 'Product already registered'
+        });
+        return;
+      }
+
+      // Create new database entry
+      const projectId = generateId();
+      const now = Date.now();
+      const insert = db.prepare(`
+        INSERT INTO projects (id, folder_path, name, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      
+      insert.run(projectId, folderPath, finalProductName, now, now);
+      
+      console.log('Created database entry for product:', {
+        id: projectId,
+        folderPath: folderPath,
+        name: finalProductName
+      });
+      
+      res.json({
+        success: true,
+        productName: finalProductName,
+        folderPath: folderPath,
+        projectId: projectId,
+        message: 'Product registered in database. Run setup-product.js on AWSC9 to create files.',
+        hint: 'On AWSC9, run: node scripts/copy-template.js ' + template + ' ' + finalProductName
+      });
+    } catch (error) {
+      const errorMessage = sanitizeError(error, 'Failed to create product from template');
+      console.error('Error in create-product-from-template:', error);
       res.status(500).json({ error: errorMessage });
     }
   });

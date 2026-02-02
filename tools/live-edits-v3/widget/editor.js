@@ -73,7 +73,8 @@
     presence: [],
     editLoaded: false, // Flag to prevent loading edit multiple times
     connectionErrorShown: false, // Flag to prevent showing connection error repeatedly
-    lastError: null // Track last error message to avoid duplicate logs
+    lastError: null, // Track last error message to avoid duplicate logs
+    editMode: null // 'selective' or 'default' - detected on init
   };
   
   console.log('Initialized with page path:', state.currentPagePath);
@@ -96,6 +97,10 @@
     await detectProject();
 
     createToolbar();
+    
+    // Detect edit mode (selective vs default) and assign IDs to editable elements
+    detectEditMode();
+    assignEditableElementIds();
     
     // Mark dynamic content before disabling editable elements
     markDynamicContent();
@@ -182,6 +187,81 @@
         console.error('Error detecting project:', error);
       }
     }
+  }
+
+  // ============================================================================
+  // EDIT MODE DETECTION & ID ASSIGNMENT
+  // ============================================================================
+  
+  /**
+   * Detect edit mode: selective (only .editable) or default (everything except .non-editable)
+   * Sets state.editMode to 'selective' or 'default'
+   */
+  function detectEditMode() {
+    const editableElements = document.querySelectorAll('.editable');
+    if (editableElements.length > 0) {
+      state.editMode = 'selective';
+      console.log('Edit mode: SELECTIVE (only .editable elements are editable)');
+    } else {
+      state.editMode = 'default';
+      console.log('Edit mode: DEFAULT (all elements editable except .non-editable)');
+    }
+  }
+
+  /**
+   * Generate a unique ID for an element
+   */
+  function generateElementId() {
+    return 'le_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+  }
+
+  /**
+   * Assign data-live-edits-id to all editable elements based on current mode
+   * This ID is used to match elements when saving/loading edits
+   */
+  function assignEditableElementIds() {
+    let elementsToMark = [];
+
+    if (state.editMode === 'selective') {
+      // Selective mode: only .editable elements
+      elementsToMark = Array.from(document.querySelectorAll('.editable'));
+    } else {
+      // Default mode: all elements except .non-editable and excluded types
+      const allElements = document.querySelectorAll('body *');
+      elementsToMark = Array.from(allElements).filter(el => {
+        // Skip if has .non-editable class
+        if (el.classList.contains('non-editable')) return false;
+        
+        // Skip SVG elements and their children
+        if (isInsideSVG(el)) return false;
+        
+        // Skip script tags
+        if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') return false;
+        
+        // Skip elements inside script/style tags
+        if (el.closest('script') || el.closest('style')) return false;
+        
+        // Skip widget UI elements
+        if (el.id === 'live-edits-toolbar' || 
+            el.id === 'live-edits-wysiwyg-container' ||
+            el.classList.contains('comment-marker') ||
+            el.classList.contains('comment-popup') ||
+            el.classList.contains('wysiwyg-controls')) {
+          return false;
+        }
+        
+        return true;
+      });
+    }
+
+    // Assign IDs to elements that don't already have one
+    elementsToMark.forEach(el => {
+      if (!el.hasAttribute('data-live-edits-id')) {
+        el.setAttribute('data-live-edits-id', generateElementId());
+      }
+    });
+
+    console.log(`Assigned IDs to ${elementsToMark.length} editable element(s) in ${state.editMode} mode`);
   }
 
   // ============================================================================
@@ -370,6 +450,27 @@
         .editable.editing {
           outline-color: #3b82f6;
           background: rgba(59, 130, 246, 0.05);
+        }
+        /* Default mode: all elements editable except .non-editable */
+        [data-live-edits-id]:not(.non-editable) {
+          outline: 2px dashed transparent;
+          transition: outline 0.2s ease;
+          cursor: pointer;
+          position: relative;
+        }
+        [data-live-edits-id]:not(.non-editable):hover {
+          outline-color: rgba(59, 130, 246, 0.5);
+        }
+        [data-live-edits-id]:not(.non-editable).editing {
+          outline-color: #3b82f6;
+          background: rgba(59, 130, 246, 0.05);
+        }
+        /* Non-editable elements in default mode */
+        .non-editable {
+          cursor: default !important;
+        }
+        .non-editable:hover {
+          outline: none !important;
         }
         /* Dynamic content indicators */
         .editable[data-dynamic],
@@ -629,12 +730,28 @@
     // Re-mark dynamic content in case DOM changed
     markDynamicContent();
     
-    const editables = document.querySelectorAll('.editable');
-    editables.forEach(el => {
+    // Re-assign IDs in case DOM changed (new elements added)
+    assignEditableElementIds();
+    
+    let elementsToEnable = [];
+    
+    if (state.editMode === 'selective') {
+      // Selective mode: only .editable elements
+      elementsToEnable = Array.from(document.querySelectorAll('.editable'));
+    } else {
+      // Default mode: all elements with data-live-edits-id except .non-editable
+      elementsToEnable = Array.from(document.querySelectorAll('[data-live-edits-id]')).filter(el => {
+        return !el.classList.contains('non-editable');
+      });
+    }
+    
+    elementsToEnable.forEach(el => {
       // Skip SVG elements and their children - they should not be editable
       if (isInsideSVG(el)) {
-        // Remove editable class from SVG elements to prevent editing
-        el.classList.remove('editable');
+        if (state.editMode === 'selective') {
+          // Remove editable class from SVG elements to prevent editing
+          el.classList.remove('editable');
+        }
         el.contentEditable = 'false';
         return;
       }
@@ -694,18 +811,37 @@
   }
 
   function disableEditableElements() {
-    // Disable all elements with .editable class
-    const editables = document.querySelectorAll('.editable');
-    editables.forEach(el => {
-      // Skip SVG elements
-      if (isInsideSVG(el)) {
-        return;
-      }
-      el.contentEditable = 'false';
-      el.classList.remove('editing');
-      // Remove click listener
-      el.removeEventListener('click', handleEditableClick);
-    });
+    if (state.editMode === 'selective') {
+      // Selective mode: disable all .editable elements
+      const editables = document.querySelectorAll('.editable');
+      editables.forEach(el => {
+        // Skip SVG elements
+        if (isInsideSVG(el)) {
+          return;
+        }
+        el.contentEditable = 'false';
+        el.classList.remove('editing');
+        // Remove click listener
+        el.removeEventListener('click', handleEditableClick);
+      });
+    } else {
+      // Default mode: disable all elements with data-live-edits-id except .non-editable
+      const editables = document.querySelectorAll('[data-live-edits-id]');
+      editables.forEach(el => {
+        // Skip SVG elements
+        if (isInsideSVG(el)) {
+          return;
+        }
+        // Skip .non-editable elements
+        if (el.classList.contains('non-editable')) {
+          return;
+        }
+        el.contentEditable = 'false';
+        el.classList.remove('editing');
+        // Remove click listener
+        el.removeEventListener('click', handleEditableClick);
+      });
+    }
     
     // Also disable any elements that might have contentEditable set directly
     const allElements = document.querySelectorAll('[contenteditable="true"]');
@@ -744,6 +880,12 @@
     // Prevent editing SVG elements and their children
     if (isInsideSVG(element)) {
       alert('⚠️ SVG elements cannot be edited. SVG content is generated programmatically and editing it manually could break the graphics.');
+      e.preventDefault();
+      return;
+    }
+
+    // In default mode, prevent editing .non-editable elements
+    if (state.editMode === 'default' && element.classList.contains('non-editable')) {
       e.preventDefault();
       return;
     }
@@ -1128,33 +1270,31 @@
     }
 
     try {
-      // Clone the body to avoid modifying the original
-      const bodyClone = document.body.cloneNode(true);
+      // Extract editable elements by their IDs
+      const editableElements = document.querySelectorAll('[data-live-edits-id]');
+      const elementEdits = {};
       
-      // Remove widget UI elements before saving
-      const toolbar = bodyClone.querySelector('#live-edits-toolbar');
-      if (toolbar) toolbar.remove();
+      editableElements.forEach(el => {
+        const id = el.getAttribute('data-live-edits-id');
+        if (id) {
+          // Clone element to avoid modifying original
+          const clone = el.cloneNode(true);
+          
+          // Remove widget UI elements from clone
+          clone.querySelectorAll('#live-edits-toolbar, .comment-marker, .wysiwyg-controls, .comment-popup').forEach(ui => ui.remove());
+          
+          // Store innerHTML (content only, not the element itself)
+          elementEdits[id] = clone.innerHTML;
+        }
+      });
       
-      // Remove all comment markers
-      bodyClone.querySelectorAll('.comment-marker').forEach(m => m.remove());
-      
-      // Remove all WYSIWYG controls
-      bodyClone.querySelectorAll('.wysiwyg-controls').forEach(c => c.remove());
-      
-      // Remove comment popups
-      bodyClone.querySelectorAll('.comment-popup').forEach(p => p.remove());
-      
-      // Remove padding-top that was added for toolbar
-      if (bodyClone.style) {
-        bodyClone.style.paddingTop = '';
-      }
-      
-      // Get the cleaned HTML content
-      const htmlContent = bodyClone.innerHTML;
+      // Convert to JSON string for storage
+      const htmlContent = JSON.stringify(elementEdits);
       
       console.log('Saving edit:', {
         projectId: state.projectId,
         pagePath: state.currentPagePath,
+        elementCount: Object.keys(elementEdits).length,
         contentLength: htmlContent.length,
         url: `${SERVER_URL}/edits`
       });
@@ -1333,95 +1473,149 @@
         throw new Error('Edit version has no content');
       }
 
-      // Store current body content as backup
-      const originalBodyHTML = document.body.innerHTML;
+      const trimmedContent = edit.html_content.trim();
       
-      // Store GTM dataLayer if it exists
-      const gtmDataLayer = window.dataLayer ? Array.from(window.dataLayer) : null;
-      
-      // Suppress GTM errors during DOM replacement
-      const originalErrorHandler = window.onerror;
-      window.onerror = function(msg, url, line, col, error) {
-        if (msg && (msg.indexOf('parentNode') !== -1 || msg.indexOf('GTM') !== -1 || msg.indexOf('gtm') !== -1)) {
-          console.debug('Suppressed GTM error during revert:', msg);
-          return true;
-        }
-        if (originalErrorHandler) {
-          return originalErrorHandler.apply(this, arguments);
-        }
-        return false;
-      };
-
+      // Try to parse as JSON (new element-by-element format)
+      let elementEdits = null;
       try {
-        // Replace body content with reverted version
-        const trimmedContent = edit.html_content.trim();
-        document.body.innerHTML = trimmedContent;
-        
-        // Restore GTM dataLayer
-        if (gtmDataLayer) {
-          if (!window.dataLayer) {
-            window.dataLayer = [];
-          }
-          gtmDataLayer.forEach(item => {
-            var exists = window.dataLayer.some(existing => 
-              JSON.stringify(existing) === JSON.stringify(item)
-            );
-            if (!exists) {
-              window.dataLayer.push(item);
-            }
-          });
+        elementEdits = JSON.parse(trimmedContent);
+        if (typeof elementEdits !== 'object' || Array.isArray(elementEdits)) {
+          elementEdits = null;
         }
-
-        // Verify replacement was successful
-        if (document.body.innerHTML.trim().length === 0) {
-          console.error('Body content was cleared after revert, restoring original');
-          document.body.innerHTML = originalBodyHTML;
-          updateStatus('Revert failed: Content was empty', 'error');
-          return;
-        }
-      } catch (error) {
-        console.error('Error replacing body content during revert:', error);
-        try {
-          document.body.innerHTML = originalBodyHTML;
-        } catch (e) {
-          console.error('Failed to restore original body content:', e);
-        }
-        updateStatus('Revert failed', 'error');
-        return;
-      } finally {
-        window.onerror = originalErrorHandler;
+      } catch (e) {
+        // Not JSON, legacy format
       }
-
-      // Re-add scripts that were removed
-      const bodyScripts = Array.from(document.body.querySelectorAll('script[src]')).filter(s => 
-        !s.src.includes('editor.js')
-      );
-      const scriptData = bodyScripts.map(s => ({ src: s.src, async: s.async, defer: s.defer }));
       
-      setTimeout(() => {
-        scriptData.forEach(scriptInfo => {
-          if (!document.querySelector(`script[src="${scriptInfo.src}"]`)) {
-            const newScript = document.createElement('script');
-            newScript.src = scriptInfo.src;
-            if (scriptInfo.async) newScript.async = true;
-            if (scriptInfo.defer) newScript.defer = true;
-            newScript.onerror = function() {
-              console.warn('Failed to reload script:', scriptInfo.src);
-            };
-            document.body.appendChild(newScript);
+      if (elementEdits) {
+        // New format: element-by-element edits
+        console.log(`Reverting ${Object.keys(elementEdits).length} element(s)`);
+        
+        let appliedCount = 0;
+        Object.keys(elementEdits).forEach(id => {
+          const element = document.querySelector(`[data-live-edits-id="${id}"]`);
+          if (element) {
+            try {
+              element.innerHTML = elementEdits[id];
+              appliedCount++;
+            } catch (error) {
+              console.warn(`Failed to revert element ${id}:`, error);
+            }
+          } else {
+            console.warn(`Element with ID ${id} not found in DOM`);
           }
         });
-      }, 100);
+        
+        console.log(`Reverted ${appliedCount} element(s) successfully`);
+        
+        // Re-assign IDs
+        assignEditableElementIds();
+        
+        // Re-run initialization
+        setTimeout(() => {
+          createToolbar();
+          markDynamicContent();
+          disableEditableElements();
+          loadComments();
+          connectWebSocket();
+          setupEventListeners();
+        }, 50);
+      } else {
+        // Legacy format: full body HTML replacement
+        console.log('Reverting using legacy format (full body replacement)');
+        
+        // Store current body content as backup
+        const originalBodyHTML = document.body.innerHTML;
+        
+        // Store GTM dataLayer if it exists
+        const gtmDataLayer = window.dataLayer ? Array.from(window.dataLayer) : null;
+        
+        // Suppress GTM errors during DOM replacement
+        const originalErrorHandler = window.onerror;
+        window.onerror = function(msg, url, line, col, error) {
+          if (msg && (msg.indexOf('parentNode') !== -1 || msg.indexOf('GTM') !== -1 || msg.indexOf('gtm') !== -1)) {
+            console.debug('Suppressed GTM error during revert:', msg);
+            return true;
+          }
+          if (originalErrorHandler) {
+            return originalErrorHandler.apply(this, arguments);
+          }
+          return false;
+        };
 
-      // Re-run initialization
-      setTimeout(() => {
-        createToolbar();
-        markDynamicContent();
-        disableEditableElements();
-        loadComments();
-        connectWebSocket();
-        setupEventListeners();
-      }, 50);
+        try {
+          // Replace body content with reverted version
+          document.body.innerHTML = trimmedContent;
+          
+          // Restore GTM dataLayer
+          if (gtmDataLayer) {
+            if (!window.dataLayer) {
+              window.dataLayer = [];
+            }
+            gtmDataLayer.forEach(item => {
+              var exists = window.dataLayer.some(existing => 
+                JSON.stringify(existing) === JSON.stringify(item)
+              );
+              if (!exists) {
+                window.dataLayer.push(item);
+              }
+            });
+          }
+
+          // Verify replacement was successful
+          if (document.body.innerHTML.trim().length === 0) {
+            console.error('Body content was cleared after revert, restoring original');
+            document.body.innerHTML = originalBodyHTML;
+            updateStatus('Revert failed: Content was empty', 'error');
+            return;
+          }
+        } catch (error) {
+          console.error('Error replacing body content during revert:', error);
+          try {
+            document.body.innerHTML = originalBodyHTML;
+          } catch (e) {
+            console.error('Failed to restore original body content:', e);
+          }
+          updateStatus('Revert failed', 'error');
+          return;
+        } finally {
+          window.onerror = originalErrorHandler;
+        }
+
+        // Re-add scripts that were removed
+        const bodyScripts = Array.from(document.body.querySelectorAll('script[src]')).filter(s => 
+          !s.src.includes('editor.js')
+        );
+        const scriptData = bodyScripts.map(s => ({ src: s.src, async: s.async, defer: s.defer }));
+        
+        setTimeout(() => {
+          scriptData.forEach(scriptInfo => {
+            if (!document.querySelector(`script[src="${scriptInfo.src}"]`)) {
+              const newScript = document.createElement('script');
+              newScript.src = scriptInfo.src;
+              if (scriptInfo.async) newScript.async = true;
+              if (scriptInfo.defer) newScript.defer = true;
+              newScript.onerror = function() {
+                console.warn('Failed to reload script:', scriptInfo.src);
+              };
+              document.body.appendChild(newScript);
+            }
+          });
+        }, 100);
+
+        // Re-assign IDs for new format
+        detectEditMode();
+        assignEditableElementIds();
+
+        // Re-run initialization
+        setTimeout(() => {
+          createToolbar();
+          markDynamicContent();
+          disableEditableElements();
+          loadComments();
+          connectWebSocket();
+          setupEventListeners();
+        }, 50);
+      }
 
       updateStatus('Reverted successfully', 'success');
       console.log('Reverted to edit:', editId);
@@ -1482,154 +1676,191 @@
           contentLength: edit.html_content ? edit.html_content.length : 0,
           created_at: edit.created_at
         });
-        // Only replace content if we have valid, non-empty HTML content
+        // Only apply edits if we have valid content
         if (edit && edit.html_content && edit.html_content.trim().length > 0) {
-          // Validate that we have actual HTML content (not just whitespace or empty tags)
           const trimmedContent = edit.html_content.trim();
           
-          // Store current body content as backup
-          const originalBodyHTML = document.body.innerHTML;
-          const originalBodyLength = originalBodyHTML.trim().length;
-          
-          // Check if content has meaningful HTML (not just empty tags or whitespace)
-          const hasContent = trimmedContent.length > 100 && // At least 100 chars
-                            (trimmedContent.indexOf('<') !== -1) && // Has HTML tags
-                            trimmedContent.replace(/<[^>]*>/g, '').trim().length > 0; // Has text content
-          
-          // Also check if saved content is suspiciously short compared to original
-          // (might indicate a save error or incomplete content)
-          const contentRatio = trimmedContent.length / Math.max(originalBodyLength, 1);
-          const isSuspiciouslyShort = originalBodyLength > 1000 && contentRatio < 0.1; // Less than 10% of original
-          
-          if (!hasContent || isSuspiciouslyShort) {
-            console.warn('Edit content appears to be empty, invalid, or suspiciously short, skipping replacement', {
-              hasContent: hasContent,
-              isSuspiciouslyShort: isSuspiciouslyShort,
-              originalLength: originalBodyLength,
-              savedLength: trimmedContent.length,
-              ratio: contentRatio
-            });
-            state.editLoaded = true;
-            return;
+          // Try to parse as JSON (new element-by-element format)
+          let elementEdits = null;
+          try {
+            elementEdits = JSON.parse(trimmedContent);
+            // Validate it's an object with string values
+            if (typeof elementEdits !== 'object' || Array.isArray(elementEdits)) {
+              elementEdits = null;
+            }
+          } catch (e) {
+            // Not JSON, might be old format (full body HTML)
+            console.log('Edit content is not JSON, treating as legacy format (full body HTML)');
           }
           
-          // Store references to scripts before replacing content
-          const bodyScripts = Array.from(document.body.querySelectorAll('script[src]')).filter(s => 
-            !s.src.includes('editor.js')
-          );
-          const scriptData = bodyScripts.map(s => ({ src: s.src, async: s.async, defer: s.defer }));
-          
-          // Store GTM dataLayer if it exists (Google Tag Manager)
-          // GTM scripts maintain references to DOM nodes, so we need to preserve the dataLayer
-          const gtmDataLayer = window.dataLayer ? Array.from(window.dataLayer) : null;
-          
-          // Suppress GTM errors during DOM replacement (they're expected when nodes are removed)
-          const originalErrorHandler = window.onerror;
-          window.onerror = function(msg, url, line, col, error) {
-            // Suppress GTM errors related to parentNode during DOM replacement
-            if (msg && (msg.indexOf('parentNode') !== -1 || msg.indexOf('GTM') !== -1 || msg.indexOf('gtm') !== -1)) {
-              console.debug('Suppressed GTM error during DOM replacement:', msg);
-              return true; // Suppress the error
-            }
-            // Let other errors through
-            if (originalErrorHandler) {
-              return originalErrorHandler.apply(this, arguments);
-            }
-            return false;
-          };
-          
-          // Replace body content with saved content
-          // The saved content is already cleaned (no widget UI elements)
-          try {
-            document.body.innerHTML = trimmedContent;
+          if (elementEdits) {
+            // New format: element-by-element edits
+            console.log(`Applying edits to ${Object.keys(elementEdits).length} element(s)`);
             
-            // Verify the replacement was successful (body should have content)
-            if (document.body.innerHTML.trim().length === 0) {
-              console.error('Body content was cleared after replacement, restoring original');
-              document.body.innerHTML = originalBodyHTML;
+            let appliedCount = 0;
+            Object.keys(elementEdits).forEach(id => {
+              const element = document.querySelector(`[data-live-edits-id="${id}"]`);
+              if (element) {
+                try {
+                  element.innerHTML = elementEdits[id];
+                  appliedCount++;
+                } catch (error) {
+                  console.warn(`Failed to apply edit to element ${id}:`, error);
+                }
+              } else {
+                console.warn(`Element with ID ${id} not found in DOM`);
+              }
+            });
+            
+            console.log(`Applied ${appliedCount} edit(s) successfully`);
+            
+            // Re-assign IDs in case new elements were added
+            assignEditableElementIds();
+            
+            // Mark as loaded
+            state.editLoaded = true;
+            
+            // Re-run initialization
+            setTimeout(() => {
+              createToolbar();
+              markDynamicContent();
+              disableEditableElements();
+              loadComments();
+              connectWebSocket();
+              setupEventListeners();
+            }, 50);
+            
+            console.log('Latest edit loaded successfully (element-by-element)');
+          } else {
+            // Legacy format: full body HTML replacement (backward compatibility)
+            console.log('Applying legacy format edit (full body replacement)');
+            
+            // Store current body content as backup
+            const originalBodyHTML = document.body.innerHTML;
+            const originalBodyLength = originalBodyHTML.trim().length;
+            
+            // Check if content has meaningful HTML
+            const hasContent = trimmedContent.length > 100 &&
+                            (trimmedContent.indexOf('<') !== -1) &&
+                            trimmedContent.replace(/<[^>]*>/g, '').trim().length > 0;
+            
+            const contentRatio = trimmedContent.length / Math.max(originalBodyLength, 1);
+            const isSuspiciouslyShort = originalBodyLength > 1000 && contentRatio < 0.1;
+            
+            if (!hasContent || isSuspiciouslyShort) {
+              console.warn('Legacy edit content appears invalid, skipping', {
+                hasContent, isSuspiciouslyShort,
+                originalLength: originalBodyLength,
+                savedLength: trimmedContent.length
+              });
               state.editLoaded = true;
               return;
             }
             
-            // Restore GTM dataLayer immediately after replacement
-            if (gtmDataLayer) {
-              if (!window.dataLayer) {
-                window.dataLayer = [];
+            // Store scripts and GTM dataLayer
+            const bodyScripts = Array.from(document.body.querySelectorAll('script[src]')).filter(s => 
+              !s.src.includes('editor.js')
+            );
+            const scriptData = bodyScripts.map(s => ({ src: s.src, async: s.async, defer: s.defer }));
+            const gtmDataLayer = window.dataLayer ? Array.from(window.dataLayer) : null;
+            
+            // Suppress GTM errors during replacement
+            const originalErrorHandler = window.onerror;
+            window.onerror = function(msg, url, line, col, error) {
+              if (msg && (msg.indexOf('parentNode') !== -1 || msg.indexOf('GTM') !== -1 || msg.indexOf('gtm') !== -1)) {
+                console.debug('Suppressed GTM error during DOM replacement:', msg);
+                return true;
               }
-              // Merge existing dataLayer with preserved one (avoid duplicates)
-              gtmDataLayer.forEach(item => {
-                // Simple check to avoid duplicates
-                var exists = window.dataLayer.some(existing => 
-                  JSON.stringify(existing) === JSON.stringify(item)
-                );
-                if (!exists) {
-                  window.dataLayer.push(item);
+              if (originalErrorHandler) {
+                return originalErrorHandler.apply(this, arguments);
+              }
+              return false;
+            };
+            
+            try {
+              document.body.innerHTML = trimmedContent;
+              
+              if (document.body.innerHTML.trim().length === 0) {
+                console.error('Body content was cleared, restoring original');
+                document.body.innerHTML = originalBodyHTML;
+                state.editLoaded = true;
+                return;
+              }
+              
+              // Restore GTM dataLayer
+              if (gtmDataLayer) {
+                if (!window.dataLayer) {
+                  window.dataLayer = [];
+                }
+                gtmDataLayer.forEach(item => {
+                  var exists = window.dataLayer.some(existing => 
+                    JSON.stringify(existing) === JSON.stringify(item)
+                  );
+                  if (!exists) {
+                    window.dataLayer.push(item);
+                  }
+                });
+              }
+            } catch (error) {
+              console.error('Error replacing body content:', error);
+              try {
+                document.body.innerHTML = originalBodyHTML;
+              } catch (restoreError) {
+                console.error('Failed to restore original body content:', restoreError);
+              }
+              state.editLoaded = true;
+              return;
+            } finally {
+              window.onerror = originalErrorHandler;
+            }
+            
+            // Re-add scripts
+            setTimeout(() => {
+              scriptData.forEach(scriptInfo => {
+                if (!document.querySelector(`script[src="${scriptInfo.src}"]`)) {
+                  const newScript = document.createElement('script');
+                  newScript.src = scriptInfo.src;
+                  if (scriptInfo.async) newScript.async = true;
+                  if (scriptInfo.defer) newScript.defer = true;
+                  newScript.onerror = function() {
+                    console.warn('Failed to reload script:', scriptInfo.src);
+                  };
+                  document.body.appendChild(newScript);
                 }
               });
-            }
-          } catch (error) {
-            console.error('Error replacing body content:', error);
-            // Restore original content on error
-            try {
-              document.body.innerHTML = originalBodyHTML;
-            } catch (restoreError) {
-              console.error('Failed to restore original body content:', restoreError);
-            }
+            }, 100);
+            
+            // Re-assign IDs for new format
+            detectEditMode();
+            assignEditableElementIds();
+            
             state.editLoaded = true;
-            return;
-          } finally {
-            // Restore original error handler
-            window.onerror = originalErrorHandler;
+            
+            setTimeout(() => {
+              createToolbar();
+              markDynamicContent();
+              disableEditableElements();
+              loadComments();
+              connectWebSocket();
+              setupEventListeners();
+            }, 50);
+            
+            console.log('Latest edit loaded successfully (legacy format)');
           }
-          
-          // Re-add scripts that were removed, but wait a bit to let DOM settle
-          setTimeout(() => {
-            scriptData.forEach(scriptInfo => {
-              if (!document.querySelector(`script[src="${scriptInfo.src}"]`)) {
-                const newScript = document.createElement('script');
-                newScript.src = scriptInfo.src;
-                if (scriptInfo.async) newScript.async = true;
-                if (scriptInfo.defer) newScript.defer = true;
-                // Add error handling for script loading
-                newScript.onerror = function() {
-                  console.warn('Failed to reload script:', scriptInfo.src);
-                };
-                document.body.appendChild(newScript);
-              }
-            });
-          }, 100);
-          
-          // Mark as loaded to prevent infinite loop
-          state.editLoaded = true;
-          
-          // Re-run initialization to recreate toolbar and setup (but init() won't run again due to guard)
-          // Use setTimeout to ensure DOM is ready
-          setTimeout(() => {
-            createToolbar();
-            // Re-mark dynamic content after DOM changes
-            markDynamicContent();
-            // Ensure all editable elements are disabled after loading content
-            disableEditableElements();
-            loadComments();
-            connectWebSocket();
-            setupEventListeners();
-          }, 50);
-          
-          console.log('Latest edit loaded successfully');
         } else {
           console.log('No edit content found');
-          state.editLoaded = true; // Mark as loaded even if no content
+          state.editLoaded = true;
         }
       } else if (response.status === 404) {
         console.log('No saved edits found for this page');
-        state.editLoaded = true; // Mark as loaded even if no edits found
+        state.editLoaded = true;
       } else {
         console.error('Failed to load edit:', response.status, response.statusText);
-        state.editLoaded = true; // Mark as loaded to prevent retry loop
+        state.editLoaded = true;
       }
     } catch (error) {
       console.error('Error loading latest edit:', error);
-      state.editLoaded = true; // Mark as loaded to prevent retry loop
+      state.editLoaded = true;
     }
   }
 

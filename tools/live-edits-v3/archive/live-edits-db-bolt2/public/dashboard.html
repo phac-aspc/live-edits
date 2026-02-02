@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Page Editor Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      color: white;
+      font-size: 36px;
+      margin-bottom: 12px;
+      font-weight: 700;
+    }
+
+    .subtitle {
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 18px;
+      margin-bottom: 40px;
+    }
+
+    .input-section {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 32px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+
+    .input-section label {
+      display: block;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .input-section input {
+      width: 100%;
+      padding: 12px 16px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 16px;
+      transition: all 0.2s ease;
+    }
+
+    .input-section input:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+
+    .input-section button {
+      margin-top: 16px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .input-section button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 24px;
+      margin-bottom: 32px;
+    }
+
+    .stat-card {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .stat-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    }
+
+    .stat-label {
+      font-size: 14px;
+      color: #6b7280;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-size: 32px;
+      font-weight: 700;
+      color: #1f2937;
+    }
+
+    .section-title {
+      color: white;
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .timeline {
+      background: white;
+      border-radius: 12px;
+      padding: 32px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+
+    .timeline-item {
+      position: relative;
+      padding-left: 32px;
+      padding-bottom: 32px;
+      border-left: 2px solid #e5e7eb;
+    }
+
+    .timeline-item:last-child {
+      padding-bottom: 0;
+      border-left-color: transparent;
+    }
+
+    .timeline-dot {
+      position: absolute;
+      left: -7px;
+      top: 4px;
+      width: 12px;
+      height: 12px;
+      background: #667eea;
+      border-radius: 50%;
+      border: 3px solid white;
+      box-shadow: 0 0 0 2px #667eea;
+    }
+
+    .timeline-content {
+      background: #f9fafb;
+      padding: 16px;
+      border-radius: 8px;
+      transition: background 0.2s ease;
+    }
+
+    .timeline-content:hover {
+      background: #f3f4f6;
+    }
+
+    .timeline-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      margin-bottom: 8px;
+    }
+
+    .timeline-initials {
+      font-weight: 700;
+      color: #667eea;
+      font-size: 16px;
+    }
+
+    .timeline-date {
+      font-size: 13px;
+      color: #6b7280;
+    }
+
+    .timeline-preview {
+      font-size: 14px;
+      color: #4b5563;
+      line-height: 1.6;
+      max-height: 100px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .timeline-preview::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 20px;
+      background: linear-gradient(transparent, #f9fafb);
+    }
+
+    .comment-item {
+      background: #fef3c7;
+      border-left: 4px solid #f59e0b;
+    }
+
+    .comment-item .timeline-dot {
+      background: #f59e0b;
+      box-shadow: 0 0 0 2px #f59e0b;
+    }
+
+    .comment-text {
+      font-size: 14px;
+      color: #374151;
+      font-style: italic;
+      margin-top: 8px;
+      padding: 8px;
+      background: white;
+      border-radius: 4px;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #6b7280;
+    }
+
+    .empty-state svg {
+      width: 64px;
+      height: 64px;
+      margin-bottom: 16px;
+      opacity: 0.3;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #6b7280;
+    }
+
+    .spinner {
+      border: 3px solid #f3f4f6;
+      border-top: 3px solid #667eea;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 16px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .error {
+      background: #fee2e2;
+      border: 1px solid #ef4444;
+      color: #991b1b;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 24px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📊 Page Editor Dashboard</h1>
+    <p class="subtitle">View edit history and comments for any page</p>
+
+    <div class="input-section">
+      <label for="page-url">Page URL or Path</label>
+      <input
+        type="text"
+        id="page-url"
+        placeholder="/index.html or full URL"
+        value="/"
+      >
+      <button onclick="loadDashboard()">Load Dashboard</button>
+    </div>
+
+    <div id="error-container"></div>
+
+    <div id="loading" class="loading" style="display: none;">
+      <div class="spinner"></div>
+      <p>Loading data...</p>
+    </div>
+
+    <div id="stats-container"></div>
+    <div id="history-container"></div>
+  </div>
+
+  <script>
+    let SUPABASE_URL = 'https://vqnlfbpjikpvyllvipbo.supabase.co';
+    let SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZxbmxmYnBqaWtwdnlsbHZpcGJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk2MDgyNzEsImV4cCI6MjA4NTE4NDI3MX0.4dArm4w3Gn0WugaseOBaQa0DDMspwZwRZb1A_hDD8TQ';
+    let API_BASE_URL = `${SUPABASE_URL}/functions/v1/page-editor-api`;
+
+    function showError(message) {
+      const container = document.getElementById('error-container');
+      container.innerHTML = `<div class="error">${message}</div>`;
+    }
+
+    function showLoading(show) {
+      document.getElementById('loading').style.display = show ? 'block' : 'none';
+    }
+
+    async function loadDashboard() {
+      const pageUrl = document.getElementById('page-url').value.trim();
+      if (!pageUrl) {
+        showError('Please enter a page URL');
+        return;
+      }
+
+      showLoading(true);
+      document.getElementById('error-container').innerHTML = '';
+      document.getElementById('stats-container').innerHTML = '';
+      document.getElementById('history-container').innerHTML = '';
+
+      try {
+        // Load stats
+        const statsResponse = await fetch(
+          `${API_BASE_URL}/stats?pageUrl=${encodeURIComponent(pageUrl)}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        if (!statsResponse.ok) throw new Error('Failed to load stats');
+        const stats = await statsResponse.json();
+
+        // Load edits
+        const editsResponse = await fetch(
+          `${API_BASE_URL}/edits?pageUrl=${encodeURIComponent(pageUrl)}&all=true`,
+          {
+            headers: {
+              'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        if (!editsResponse.ok) throw new Error('Failed to load edits');
+        const edits = await editsResponse.json();
+
+        // Load comments
+        const commentsResponse = await fetch(
+          `${API_BASE_URL}/comments?pageUrl=${encodeURIComponent(pageUrl)}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        if (!commentsResponse.ok) throw new Error('Failed to load comments');
+        const comments = await commentsResponse.json();
+
+        renderStats(stats);
+        renderHistory(edits, comments);
+      } catch (error) {
+        console.error('Error:', error);
+        showError('Error loading dashboard data: ' + error.message);
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    function renderStats(stats) {
+      const container = document.getElementById('stats-container');
+      container.innerHTML = `
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">Total Edits</div>
+            <div class="stat-value">${stats.editCount}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Total Comments</div>
+            <div class="stat-value">${stats.commentCount}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Last Editor</div>
+            <div class="stat-value" style="font-size: 28px;">
+              ${stats.latestEdit ? stats.latestEdit.edited_by : 'N/A'}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderHistory(edits, comments) {
+      const container = document.getElementById('history-container');
+
+      if (edits.length === 0 && comments.length === 0) {
+        container.innerHTML = `
+          <div class="timeline">
+            <div class="empty-state">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <p style="font-size: 18px; margin-bottom: 8px; font-weight: 500;">No activity yet</p>
+              <p>Edits and comments will appear here</p>
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      // Combine and sort by date
+      const allItems = [
+        ...edits.map(edit => ({ ...edit, type: 'edit' })),
+        ...comments.map(comment => ({ ...comment, type: 'comment' }))
+      ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+      const timelineHTML = allItems.map(item => {
+        const date = new Date(item.created_at).toLocaleString();
+
+        if (item.type === 'edit') {
+          const preview = item.html_content
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .substring(0, 200);
+
+          return `
+            <div class="timeline-item">
+              <div class="timeline-dot"></div>
+              <div class="timeline-content">
+                <div class="timeline-header">
+                  <div class="timeline-initials">✏️ ${item.edited_by}</div>
+                  <div class="timeline-date">${date}</div>
+                </div>
+                <div class="timeline-preview">${preview}...</div>
+              </div>
+            </div>
+          `;
+        } else {
+          return `
+            <div class="timeline-item">
+              <div class="timeline-dot"></div>
+              <div class="timeline-content comment-item">
+                <div class="timeline-header">
+                  <div class="timeline-initials">💬 ${item.initials}</div>
+                  <div class="timeline-date">${date}</div>
+                </div>
+                <div class="comment-text">"${item.comment_text}"</div>
+                <div style="font-size: 12px; color: #6b7280; margin-top: 8px;">
+                  Position: (${item.x_position}, ${item.y_position})
+                </div>
+              </div>
+            </div>
+          `;
+        }
+      }).join('');
+
+      container.innerHTML = `
+        <h2 class="section-title">
+          <span>📜</span>
+          <span>Activity Timeline</span>
+        </h2>
+        <div class="timeline">
+          ${timelineHTML}
+        </div>
+      `;
+    }
+
+    // Initialize
+    if (window.opener) {
+      const openerPath = new URL(window.opener.location.href).pathname;
+      document.getElementById('page-url').value = openerPath;
+      loadDashboard();
+    }
+  </script>
+</body>
+</html>

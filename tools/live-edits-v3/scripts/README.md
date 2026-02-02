@@ -72,9 +72,12 @@ node scripts/publish-product.js product-name
 
 **What it does:**
 1. Fetches latest edits from server
-2. Reconstructs HTML files (removes editor script)
-3. Copies files back to original folder
-4. Creates backup in `_backups/`
+2. Applies element-by-element edits (new format) or reconstructs full HTML (legacy format)
+3. Removes editor scripts and `data-live-edits-id` attributes
+4. Copies files back to original folder
+5. Creates backup in `_backups/`
+
+**Note:** The script automatically detects whether edits are in the new JSON format (element-by-element) or legacy HTML format and handles both appropriately.
 
 **Environment Variables:**
 - `SERVER_URL` - Azure VM server URL

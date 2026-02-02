@@ -120,42 +120,96 @@ fetchEdits(SERVER_URL, productId, function (err, edits) {
     const pagePath = folderPathBase + '/' + relativePath.replace(/\\/g, '/');
 
     if (editsMap[pagePath]) {
-      // The saved edit contains only body.innerHTML, so we need to reconstruct the full HTML
       // Read the template file structure to preserve DOCTYPE, head, etc.
       const originalFilePath = join(originalPath, relativePath);
       let templateFileContent = '';
       
       // Use the file from _live-edits folder as template (it has the full structure)
-      // This is better than using the original because it might have been modified
       templateFileContent = readFileSync(filePath, 'utf-8');
       
-      // Extract the saved body content
-      let savedBodyContent = editsMap[pagePath];
-      // Remove editor scripts if they somehow got in there
-      savedBodyContent = savedBodyContent.replace(/<script src="[^"]*editor\.js"[^>]*><\/script>\s*/gi, '');
-      savedBodyContent = savedBodyContent.replace(/<script[^>]*>[\s\S]*?editor\.js[\s\S]*?<\/script>\s*/gi, '');
+      // Get the saved edit content
+      let savedContent = editsMap[pagePath];
       
-      // Reconstruct the HTML by replacing the body content
+      // Try to parse as JSON (new element-by-element format)
+      let elementEdits = null;
+      try {
+        const parsed = JSON.parse(savedContent);
+        if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+          elementEdits = parsed;
+        }
+      } catch (e) {
+        // Not JSON, treat as legacy format (full body HTML)
+      }
+      
       let reconstructedHTML = templateFileContent;
       
-      // Try to replace body content while preserving body tag attributes
-      const bodyTagMatch = templateFileContent.match(/<body([^>]*)>([\s\S]*)<\/body>/i);
-      if (bodyTagMatch) {
-        // Replace body content while keeping body tag and attributes
-        const bodyAttributes = bodyTagMatch[1];
-        reconstructedHTML = templateFileContent.replace(
-          /<body[^>]*>[\s\S]*?<\/body>/i,
-          '<body' + bodyAttributes + '>' + savedBodyContent + '</body>'
-        );
+      if (elementEdits) {
+        // New format: element-by-element edits
+        // We need to load the template into a DOM parser to apply edits
+        // Since we're in Node.js, we'll use a simple regex-based approach
+        // For each element ID in the saved edits, find and replace its content in the template
+        
+        console.log('   Applying ' + Object.keys(elementEdits).length + ' element edit(s) to ' + relativePath);
+        
+        // For each saved element edit, find the element in the template and update it
+        Object.keys(elementEdits).forEach(elementId => {
+          // Find the element with matching data-live-edits-id attribute
+          // Use a regex to find the element and replace its innerHTML
+          const elementPattern = new RegExp(
+            '(<[^>]+data-live-edits-id=["\']' + elementId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '["\'][^>]*>)([\\s\\S]*?)(</[^>]+>)',
+            'i'
+          );
+          
+          const match = templateFileContent.match(elementPattern);
+          if (match) {
+            // Replace the content between opening and closing tags
+            const openingTag = match[1];
+            const closingTag = match[3];
+            const newElementContent = openingTag + elementEdits[elementId] + closingTag;
+            reconstructedHTML = reconstructedHTML.replace(elementPattern, newElementContent);
+          } else {
+            // Try without the closing tag match (self-closing or different structure)
+            const selfClosingPattern = new RegExp(
+              '(<[^>]+data-live-edits-id=["\']' + elementId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '["\'][^>]*>)([\\s\\S]*?)(?=<[^>]+data-live-edits-id|</body>|$)',
+              'i'
+            );
+            const selfMatch = templateFileContent.match(selfClosingPattern);
+            if (selfMatch) {
+              const openingTag = selfMatch[1];
+              const newElementContent = openingTag + elementEdits[elementId];
+              reconstructedHTML = reconstructedHTML.replace(selfClosingPattern, newElementContent);
+            } else {
+              console.warn('   Warning: Could not find element with ID ' + elementId + ' in template');
+            }
+          }
+        });
       } else {
-        // Fallback: if no body tag found, this is unusual but handle it
-        console.warn('   Warning: No <body> tag found in template file for ' + relativePath);
-        // Try to insert before </html>
-        if (templateFileContent.indexOf('</html>') !== -1) {
-          reconstructedHTML = templateFileContent.replace(/<\/html>/i, '<body>' + savedBodyContent + '</body></html>');
+        // Legacy format: full body HTML replacement
+        let savedBodyContent = savedContent;
+        // Remove editor scripts if they somehow got in there
+        savedBodyContent = savedBodyContent.replace(/<script src="[^"]*editor\.js"[^>]*><\/script>\s*/gi, '');
+        savedBodyContent = savedBodyContent.replace(/<script[^>]*>[\s\S]*?editor\.js[\s\S]*?<\/script>\s*/gi, '');
+        
+        // Reconstruct the HTML by replacing the body content
+        // Try to replace body content while preserving body tag attributes
+        const bodyTagMatch = templateFileContent.match(/<body([^>]*)>([\s\S]*)<\/body>/i);
+        if (bodyTagMatch) {
+          // Replace body content while keeping body tag and attributes
+          const bodyAttributes = bodyTagMatch[1];
+          reconstructedHTML = templateFileContent.replace(
+            /<body[^>]*>[\s\S]*?<\/body>/i,
+            '<body' + bodyAttributes + '>' + savedBodyContent + '</body>'
+          );
         } else {
-          // Last resort: prepend basic HTML structure
-          reconstructedHTML = '<!DOCTYPE html>\n<html>\n<head><title>Page</title></head>\n<body>' + savedBodyContent + '</body>\n</html>';
+          // Fallback: if no body tag found, this is unusual but handle it
+          console.warn('   Warning: No <body> tag found in template file for ' + relativePath);
+          // Try to insert before </html>
+          if (templateFileContent.indexOf('</html>') !== -1) {
+            reconstructedHTML = templateFileContent.replace(/<\/html>/i, '<body>' + savedBodyContent + '</body></html>');
+          } else {
+            // Last resort: prepend basic HTML structure
+            reconstructedHTML = '<!DOCTYPE html>\n<html>\n<head><title>Page</title></head>\n<body>' + savedBodyContent + '</body>\n</html>';
+          }
         }
       }
       
@@ -165,12 +219,14 @@ fetchEdits(SERVER_URL, productId, function (err, edits) {
       reconstructedHTML = reconstructedHTML.replace(/<script[^>]*socket\.io[^>]*><\/script>\s*/gi, '');
       // Remove meta tag for live-edits-folder-path
       reconstructedHTML = reconstructedHTML.replace(/<meta[^>]*name=["']live-edits-folder-path["'][^>]*>\s*/gi, '');
+      // Remove data-live-edits-id attributes (they're only needed during editing)
+      reconstructedHTML = reconstructedHTML.replace(/\s*data-live-edits-id=["'][^"']*["']/gi, '');
       
       const originalDir = dirname(originalFilePath);
       if (!existsSync(originalDir)) mkdirSync(originalDir, { recursive: true });
       writeFileSync(originalFilePath, reconstructedHTML, 'utf-8');
       updatedCount++;
-      console.log('   Updated ' + relativePath + ' (reconstructed full HTML)');
+      console.log('   Updated ' + relativePath + (elementEdits ? ' (element-by-element)' : ' (legacy format)'));
     } else {
       let htmlContent = readFileSync(filePath, 'utf-8');
       htmlContent = htmlContent.replace(/<script src="[^"]*editor\.js"[^>]*><\/script>\s*/gi, '');

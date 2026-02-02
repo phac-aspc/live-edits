@@ -11,8 +11,10 @@ import json
 import requests
 import csv
 import io
+import re
 from datetime import datetime
 from typing import Dict, List, Any, Optional
+from urllib.parse import urlparse, unquote
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -373,7 +375,7 @@ class GitHubProjectExporter:
             
             # Exclude sub-issues assigned to specific users
             assignees = item.get('assignees', [])
-            excluded_assignees = {'halligater', 'smannan9'}
+            excluded_assignees = {'halligater', 'smannan9', 'jcrain73'}
             if assignees and any(assignee.lower() in excluded_assignees for assignee in assignees):
                 continue
             
@@ -407,12 +409,12 @@ class GitHubProjectExporter:
             if anticipated_release_date is None:
                 date_condition_met = True
             
-            # Condition 2: anticipated_release_date <= CURRENT_DATE + INTERVAL '60' DAY
-            if anticipated_release_date and anticipated_release_date <= current_date + timedelta(days=60):
+            # Condition 2: anticipated_release_date is in the future but within 60 days
+            if anticipated_release_date and anticipated_release_date > current_date and anticipated_release_date <= current_date + timedelta(days=60):
                 date_condition_met = True
             
-            # Condition 3: anticipated_release_date >= CURRENT_DATE - INTERVAL '14' DAY
-            if anticipated_release_date and anticipated_release_date >= current_date - timedelta(days=14):
+            # Condition 3: anticipated_release_date is in the past but within 14 days
+            if anticipated_release_date and anticipated_release_date < current_date and anticipated_release_date >= current_date - timedelta(days=14):
                 date_condition_met = True
             
             if date_condition_met:
@@ -420,26 +422,74 @@ class GitHubProjectExporter:
         
         return filtered_items
     
+    def extract_file_path_from_url(self, url: str) -> str:
+        """Extract file path from a URL, handling version names carefully"""
+        if not url or not isinstance(url, str):
+            return ''
+        
+        try:
+            parsed = urlparse(url)
+            path = unquote(parsed.path)
+            
+            # Remove leading slash
+            if path.startswith('/'):
+                path = path[1:]
+            
+            # Handle version patterns carefully - preserve them in the path
+            # Common patterns: /v1/, /v2/, /version-1/, /v1.0/, etc.
+            # We want to keep these in the path but ensure they're valid
+            
+            # Remove query parameters and fragments
+            return path
+        except Exception:
+            return ''
+    
+    def extract_locations_from_dev_link(self, dev_link: str) -> str:
+        """Extract file name and path from Dev link, handling version names"""
+        if not dev_link or not isinstance(dev_link, str):
+            return ''
+        
+        # Dev link might contain multiple URLs (EN: and FR:)
+        # Extract paths from each URL
+        locations = []
+        
+        # Find all URLs in the text
+        url_pattern = r'https?://[^\s]+'
+        urls = re.findall(url_pattern, dev_link)
+        
+        for url in urls:
+            try:
+                parsed = urlparse(url)
+                path = unquote(parsed.path)
+                
+                # Remove leading slash
+                if path.startswith('/'):
+                    path = path[1:]
+                
+                if path:
+                    # Extract filename and directory
+                    parts = path.split('/')
+                    if parts:
+                        filename = parts[-1] if parts[-1] else (parts[-2] if len(parts) > 1 else '')
+                        filepath = '/'.join(parts[:-1]) if len(parts) > 1 else ''
+                        
+                        if filename:
+                            location = f"{filename}"
+                            if filepath:
+                                location = f"{filepath}/{filename}"
+                            locations.append(location)
+            except Exception:
+                continue
+        
+        return ', '.join(locations) if locations else ''
+    
     def export_to_csv(self, items: List[Dict[str, Any]], view_config: Dict[str, Any] = None) -> str:
-        """Convert items to CSV format using view configuration for field order"""
+        """Convert items to CSV format with only url, existing_file_path, and locations columns"""
         if not items:
             return ""
         
-        # Define the exact field order as requested
-        preferred_field_order = [
-            'Product',
-            'Dev link',
-            'High profile',
-            'Release type',
-            'Product type',
-            'Anticipated release date',
-            'Client organization/branch',
-            'Program contacts',
-            'Assignee (developer)'
-        ]
-        
-        # Only include the exact 9 fields specified, in the exact order
-        fieldnames = preferred_field_order
+        # Only include the 3 fields specified
+        fieldnames = ['url', 'existing_file_path', 'locations']
         
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=fieldnames)
@@ -447,41 +497,48 @@ class GitHubProjectExporter:
         
         for item in items:
             row = {}
-            for field in fieldnames:
-                # Define possible field names for each column based on actual available fields
-                possible_fields = {
-                    'Product': ['Product'],
-                    'Dev link': ['Dev link', 'Dev links'],
-                    'High profile': ['High profile'],
-                    'Release type': ['Release type'],
-                    'Product type': ['Product type'],
-                    'Anticipated release date': ['Anticipated release date'],
-                    'Client organization/branch': ['Client organization/branch'],
-                    'Program contacts': ['Client contacts'],
-                    'Assignee (developer)': ['assignees']
-                }
-                
-                # Try to find the field value using multiple possible field names
-                value = None
-                field_candidates = possible_fields.get(field, [field])
-                
-                for candidate in field_candidates:
-                    # Check direct fields first
-                    if candidate in item:
-                        value = item[candidate]
-                        break
-                    # Then check custom fields
-                    elif 'custom_fields' in item and candidate in item['custom_fields']:
-                        value = item['custom_fields'][candidate]
-                        break
-                
-                if value is not None:
-                    if isinstance(value, list):
-                        row[field] = ', '.join(str(x) for x in value)
-                    else:
-                        row[field] = str(value)
-                else:
-                    row[field] = ''
+            
+            # url: GitHub issue URL
+            row['url'] = item.get('html_url', '')
+            
+            # existing_file_path: Try to get from custom fields, or extract from Dev link
+            existing_file_path = ''
+            
+            # First, try custom fields with various possible names
+            custom_fields = item.get('custom_fields', {})
+            for field_name in ['existing_file_path', 'Existing file path', 'File path', 'Dev link', 'Dev links']:
+                if field_name in custom_fields:
+                    existing_file_path = custom_fields[field_name]
+                    break
+            
+            # If not found in custom fields, try to extract from Dev link
+            if not existing_file_path:
+                dev_link = custom_fields.get('Dev link', '') or custom_fields.get('Dev links', '')
+                if dev_link:
+                    # Extract the first path from Dev link
+                    paths = self.extract_locations_from_dev_link(dev_link)
+                    if paths:
+                        # Take the first location as existing_file_path
+                        existing_file_path = paths.split(',')[0].strip()
+            
+            row['existing_file_path'] = existing_file_path
+            
+            # locations: File name and path, extracted from Dev link or custom field
+            locations = ''
+            
+            # Try custom field first
+            if 'locations' in custom_fields:
+                locations = custom_fields['locations']
+            elif 'Locations' in custom_fields:
+                locations = custom_fields['Locations']
+            else:
+                # Extract from Dev link
+                dev_link = custom_fields.get('Dev link', '') or custom_fields.get('Dev links', '')
+                if dev_link:
+                    locations = self.extract_locations_from_dev_link(dev_link)
+            
+            row['locations'] = locations
+            
             writer.writerow(row)
         
         return output.getvalue()

@@ -2,8 +2,8 @@ name: Export GitHub Project to Google Sheets
 
 on:
   schedule:
-    # Run every Thursday at 11 AM UTC (adjust timezone as needed)
-    - cron: '0 11 * * 4'
+    # Run every Friday at 4 PM UTC (adjust timezone as needed)
+    - cron: '0 16 * * 5'
   workflow_dispatch:
     inputs:
       create_new_tab:

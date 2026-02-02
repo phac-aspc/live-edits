@@ -26,7 +26,8 @@ export function initDatabase() {
       name TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
-      status TEXT DEFAULT 'active'
+      status TEXT DEFAULT 'active',
+      default_page TEXT DEFAULT '/index.html'
     );
 
     -- Edits table (stores HTML content snapshots)
@@ -76,6 +77,23 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_presence_project_page ON presence(project_id, page_path);
     CREATE INDEX IF NOT EXISTS idx_presence_last_seen ON presence(last_seen);
   `);
+
+  // Migration: Add default_page column to projects table if it doesn't exist
+  try {
+    // Check if column exists by trying to select it
+    db.prepare('SELECT default_page FROM projects LIMIT 1').get();
+  } catch (error) {
+    // Column doesn't exist, add it
+    try {
+      db.exec(`
+        ALTER TABLE projects ADD COLUMN default_page TEXT DEFAULT '/index.html';
+      `);
+      console.log('Added default_page column to projects table');
+    } catch (alterError) {
+      // Column might already exist or table might not exist yet
+      console.log('Note: default_page column migration:', alterError.message);
+    }
+  }
 
   // Clean up stale presence (older than 30 seconds)
   const cleanupStalePresence = db.prepare(`

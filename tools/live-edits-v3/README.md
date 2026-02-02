@@ -141,12 +141,14 @@ node scripts/publish-product.js <product-name>
 
 ## Features
 
+- ✅ **Dual-mode editing**: Selective (`.editable` only) or default (everything except `.non-editable`)
+- ✅ **Element-by-element saving**: Preserves interactive elements, scripts, and event listeners
 - ✅ WYSIWYG editing
 - ✅ Real-time collaboration
 - ✅ Comment system
-- ✅ Edit history
+- ✅ Edit history with revert
 - ✅ Presence indicators
-- ✅ Conflict detection
+- ✅ Backward compatible with existing edits
 
 ## License
 
