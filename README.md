@@ -72,8 +72,6 @@ On EC2, products are stored in:
 environment/
 ├── _live-edits/
 │   ├── products/    # Product folders for editing
-│   │   ├── amrnet/
-│   │   └── other-product/
 │   ├── scripts/     # Setup/publish scripts
 │   └── widget/      # Editor widget files
 └── amrnet/          # Original product folder
