@@ -100,7 +100,10 @@ Invoke-RestMethod http://127.0.0.1:3000/healthz
 Invoke-RestMethod https://test.infobase-dev.com/live-edits/healthz
 Get-ScheduledTask -TaskName 'Health Infobase Live Edits'
 Get-Content E:\live-edits\server\logs\live-edits.log -Tail 50
+Get-Content E:\live-edits\server\logs\live-edits-error.log -Tail 50
 ```
+
+The startup task launches the selected Node.js executable through `Start-Process -Wait`. Standard output and standard error are captured separately, and an unexpected Node.js exit code is appended to `live-edits-error.log` for service lifetime diagnostics.
 
 An unauthenticated request to `/live-edits/api/v1/projects` must return `401`. A browser preflight from an origin other than the two configured preview origins must fail.
 
