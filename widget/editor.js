@@ -2,7 +2,7 @@
   'use strict';
 
   const bootstrap = document.currentScript;
-  if (!bootstrap?.dataset.liveEditsBootstrap || window.__liveEditsV4) return;
+  if (!bootstrap?.hasAttribute('data-live-edits-bootstrap') || window.__liveEditsV4) return;
   window.__liveEditsV4 = true;
 
   const config = {

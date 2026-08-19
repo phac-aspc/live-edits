@@ -294,7 +294,7 @@ export function stripEditorBootstrap(html) {
 export function injectEditorBootstrap(html, options) {
   const clean = stripEditorBootstrap(html);
   const attrs = {
-    'data-live-edits-bootstrap': '',
+    'data-live-edits-bootstrap': 'true',
     'data-api-base': options.apiBase,
     'data-site-key': options.siteKey,
     'data-project-path': options.projectPath,

@@ -67,6 +67,7 @@ test('bootstrap injection is idempotent and uses explicit deployment data', () =
   const once = injectEditorBootstrap(PAGE, options);
   const twice = injectEditorBootstrap(once, options);
   assert.equal(once, twice);
+  assert.match(once, /data-live-edits-bootstrap="true"/);
   assert.match(once, /data-site-key="fr"/);
   assert.match(once, /https:\/\/test\.infobase-dev\.com\/live-edits/);
 });
