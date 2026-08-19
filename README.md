@@ -1,153 +1,57 @@
-# Live Edits - Production-Ready Collaborative Editor
+# Health Infobase Live Edits
 
-A lightweight, embeddable WYSIWYG editor for collaborative content editing. Designed for Health Infobase's workflow where developers copy product folders to `_live-edits/products/` for client review and editing.
+Live Edits is a bilingual, collaborative review tool for making controlled HTML content changes in staged Health Infobase pages. Version 4 separates the public preview sites from the edit API:
 
-## Architecture
+| Role | URL or location |
+| --- | --- |
+| English preview | `https://en.infobase-dev.com`, served from `/home/ec2-user/environment/wwwroot/en` |
+| French preview | `https://fr.infobase-dev.com`, served from `/home/ec2-user/environment/wwwroot/fr` |
+| TEST API | `https://test.infobase-dev.com/live-edits` on the Azure Windows TEST VM |
+| Production source | The selected product folder under the applicable English or French document root |
 
-- **EC2 Instance**: Serves static HTML files with embedded widget
-- **Azure VM**: Node.js server with SQLite database (centralized)
-- **Widget**: Vanilla JavaScript embeddable editor
-- **Real-time**: WebSocket-based collaboration
+The Cloud9 setup command copies a product into the existing shared Apache alias under `/_live-edits/v4/products/en/` or `/_live-edits/v4/products/fr/`, assigns deterministic keys to safe content blocks, injects the editor bootstrap, copies the shared version 4 widget, and registers the project with Azure. Editors authenticate with a shared editor access code, edit only keyed regions, save versioned fragment maps, comment on specific elements, view history, and see presence. The publisher retrieves the latest unpublished revisions and applies only those fragments to the source files after validation and a dry run.
 
-## Quick Start
+Version 4 intentionally does not publish the widget or its bootstrap. It leaves only benign `data-live-edits-key` attributes in published HTML so future edit sessions keep the same element identities.
 
-### 1. Setup Azure VM Server
+## Safety model
 
-```bash
-cd server
-npm install
-# Configure .env with SERVER_URL
-npm start
-```
+The default production mode requires two different 32 character or longer tokens:
 
-### 2. Setup Product on EC2
+* `EDITOR_TOKEN` permits browser editing, history, comments, and presence.
+* `ADMIN_TOKEN` permits project registration and publishing. It must never be placed in browser code or a web root.
 
-From the `_live-edits` directory:
+The server sanitizes every saved fragment. Publishing is dry run by default, refuses changed source files unless explicitly overridden, rejects missing or nested keys and structurally invalid HTML, creates private per file backups, writes validated files atomically, and records a publish event.
 
-```bash
-# List available products
-node scripts/setup-product.js --list
+The shared token mode is the secure interim deployment option. Individual Microsoft Entra ID authentication and role based authorization are tracked in [FUTURE_CHANGES.md](FUTURE_CHANGES.md) pending tenant and app registration decisions.
 
-# Setup a product (use just the product name)
-node scripts/setup-product.js amrnet
+## Requirements
 
-# Or use full path
-node scripts/setup-product.js /home/ec2-user/environment/amrnet
+* Node.js 24.18.1 or newer and earlier than Node.js 25.
+* Azure TEST VM with IIS, WebSocket Protocol, URL Rewrite, and Application Request Routing.
+* SQLite storage on a persistent local TEST VM volume.
+* Apache with English and French document roots on the EC2 Cloud9 host.
 
-# For topic folders with multiple products, copy only specific subfolders
-node scripts/setup-product.js /path/to/topic-folder --subfolders product1,product2
+## Start here
 
-# Copy only specific HTML files
-node scripts/setup-product.js /path/to/folder --files index.html,about/index.html
-```
+1. Follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) to build the Azure TEST VM and the new Cloud9 host.
+2. Follow [docs/OPERATIONS.md](docs/OPERATIONS.md) to stage and publish a product.
+3. Read [docs/SECURITY.md](docs/SECURITY.md) before exposing previews to external reviewers. The Cloud9 bootstrap does not change existing Apache mappings; its access hardening configuration is optional.
+4. Review [CHANGELOG.md](CHANGELOG.md) and [FUTURE_CHANGES.md](FUTURE_CHANGES.md).
 
-This will:
-- Copy folder (or selected subfolders/files) to `_live-edits/products/product-name/`
-- Inject widget script into HTML files
-- Register product with Azure VM server
-
-### 3. Publish Edits
+## Development
 
 ```bash
-node scripts/publish-product.js product-name
+npm ci
+npm --prefix server ci
+npm test
+npm --prefix server test
+npm run check
 ```
 
-This will:
-- Fetch latest edits from Azure VM
-- Reconstruct HTML files
-- Copy back to original folder
+Copy `server/.env.example` to `server/.env` before starting the API. Development may use `AUTH_MODE=disabled` only when `NODE_ENV` is not `production` and the server is bound to a trusted local interface.
 
-## Project Structure
-
-```
-live-edits-v3/
-├── server/          # Azure VM code (Express + WebSocket + SQLite)
-├── widget/          # Embeddable editor script
-├── scripts/         # EC2 utility scripts
-└── README.md
-```
-
-On EC2, products are stored in:
-```
-environment/
-├── _live-edits/
-│   ├── products/    # Product folders for editing
-│   ├── scripts/     # Setup/publish scripts
-│   └── widget/      # Editor widget files
-└── amrnet/          # Original product folder
-```
-
-## Configuration
-
-### Server (.env)
-```
-PORT=3000
-SERVER_URL=http://your-azure-vm-domain.com:3000
-NODE_ENV=production
-```
-
-### Widget (hardcoded in editor.js)
-```javascript
-const SERVER_URL = 'http://your-azure-vm-domain.com/live-edits';
-```
-
-## Scripts Reference
-
-### setup-product.js
-Sets up a product folder for live editing.
-
-**Usage:**
 ```bash
-# List available products
-node scripts/setup-product.js --list
-
-# Setup product (from _live-edits directory)
-node scripts/setup-product.js <product-name>
-
-# Setup with full path
-node scripts/setup-product.js /path/to/product-folder
-
-# Copy only specific subfolders from a topic folder
-node scripts/setup-product.js /path/to/topic-folder --subfolders product1,product2
-
-# Copy only specific HTML files
-node scripts/setup-product.js /path/to/folder --files index.html,about/index.html
-
-# Combine both options
-node scripts/setup-product.js /path/to/topic-folder --subfolders product1 --files product1/index.html
+npm --prefix server start
 ```
 
-**What it does:**
-- Copies product (or selected subfolders/files) to `_live-edits/products/<product-name>/`
-- Injects editor widget into all HTML files
-- Creates `.live-edits/config.json` with product metadata
-- Registers product with Azure VM server
-
-### publish-product.js
-Publishes edited content back to the original product folder.
-
-**Usage:**
-```bash
-node scripts/publish-product.js <product-name>
-```
-
-**What it does:**
-- Fetches latest edits from Azure VM server
-- Reconstructs HTML files with edited content
-- Creates backup in `_backups/<product-name>/<timestamp>/`
-- Copies updated files back to original folder
-
-## Features
-
-- ✅ **Dual-mode editing**: Selective (`.editable` only) or default (everything except `.non-editable`)
-- ✅ **Element-by-element saving**: Preserves interactive elements, scripts, and event listeners
-- ✅ WYSIWYG editing
-- ✅ Real-time collaboration
-- ✅ Comment system
-- ✅ Edit history with revert
-- ✅ Presence indicators
-- ✅ Backward compatible with existing edits
-
-## License
-
-MIT
+The release version is `4.0.0`. It is intentionally a major version because the API routes, database schema, saved payload, project identity, setup state, and publishing behavior are incompatible with version 3.

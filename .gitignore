@@ -1,59 +1,39 @@
-# Ignore everything by default
-*
-
-# Allow tools directory and its subdirectories
-!tools/
-!tools/*/
-!tools/*/**
-
-#Ignore all files in the tools directory
-tools/infolauncher/
-tools/infolauncher/*
-tools/infolauncher/*/
-tools/infolauncher/*/**
-
-# Allow this .gitignore file itself
-!.gitignore
-
-# Dependencies (for tools that use Node.js)
 node_modules/
-package-lock.json
-yarn.lock
+server/node_modules/
 
-# Database
+# Runtime state and databases
+state/
+server/data/
+server/*.db
+server/*.db-*
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
 
-# Environment
+# Environment and secrets
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
-# Logs
+# Generated previews, backups, and logs
+.live-edits-staging/
+_backups/
 logs/
 *.log
-npm-debug.log*
 
-# OS
+# Test and build output
+coverage/
+dist/
+build/
+tmp/
+temp/
+*.tmp
+
+# Editors and operating systems
 .DS_Store
 Thumbs.db
-
-# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# Build outputs
-dist/
-build/
-
-# Test coverage
-coverage/
-
-# Temporary files
-tmp/
-temp/
-*.tmp
