@@ -2,6 +2,7 @@ param(
   [string]$IisSiteName = 'Default Web Site',
   [string]$ApplicationPath = '/live-edits',
   [string]$TaskName = 'Health Infobase Live Edits',
+  [string]$NodePath,
   [switch]$SkipIis
 )
 
@@ -17,11 +18,24 @@ if (-not (Test-Path $envFile)) {
   throw "Create $envFile from server\.env.example and set unique tokens before running this installer."
 }
 
-$node = (Get-Command node.exe -ErrorAction Stop).Source
-$npm = (Get-Command npm.cmd -ErrorAction Stop).Source
-$nodeVersion = (& $node --version).TrimStart('v').Split('.')
+if ($NodePath) {
+  if (-not (Test-Path -LiteralPath $NodePath -PathType Leaf)) {
+    throw "The requested Node.js executable does not exist: $NodePath"
+  }
+  $node = (Resolve-Path -LiteralPath $NodePath).Path
+} else {
+  $node = (Get-Command node.exe -ErrorAction Stop).Source
+}
+$npmCandidate = Join-Path (Split-Path -Parent $node) 'npm.cmd'
+$npm = if (Test-Path -LiteralPath $npmCandidate -PathType Leaf) {
+  $npmCandidate
+} else {
+  (Get-Command npm.cmd -ErrorAction Stop).Source
+}
+$nodeVersionText = (& $node --version).Trim()
+$nodeVersion = $nodeVersionText.TrimStart('v').Split('.')
 if ([int]$nodeVersion[0] -ne 24) {
-  throw 'Node.js 24 LTS is required.'
+  throw "Node.js 24 LTS is required. The selected executable reports $nodeVersionText."
 }
 
 New-Item -ItemType Directory -Path $dataRoot, $logRoot -Force | Out-Null
@@ -48,7 +62,7 @@ if (-not $SkipIis) {
 $powerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
 $action = New-ScheduledTaskAction `
   -Execute $powerShell `
-  -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$startScript`"" `
+  -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$startScript`" -NodePath `"$node`"" `
   -WorkingDirectory $repositoryRoot
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet `

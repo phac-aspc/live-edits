@@ -1,3 +1,7 @@
+param(
+  [string]$NodePath = 'node.exe'
+)
+
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -7,5 +11,13 @@ New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 Set-Location $serverRoot
 
 $logFile = Join-Path $logRoot 'live-edits.log'
-& node.exe 'src\index.js' *>> $logFile
+if ([System.IO.Path]::IsPathRooted($NodePath)) {
+  if (-not (Test-Path -LiteralPath $NodePath -PathType Leaf)) {
+    throw "The configured Node.js executable does not exist: $NodePath"
+  }
+  $node = (Resolve-Path -LiteralPath $NodePath).Path
+} else {
+  $node = (Get-Command $NodePath -ErrorAction Stop).Source
+}
+& $node 'src\index.js' *>> $logFile
 exit $LASTEXITCODE

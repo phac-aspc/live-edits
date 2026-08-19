@@ -32,7 +32,7 @@ The first is `EDITOR_TOKEN`. Reviewers may enter it in the browser. The second i
 2. Install a valid TLS certificate and add an HTTPS binding for `test.infobase-dev.com` to the chosen IIS site.
 3. Enable the IIS WebSocket Protocol Windows feature.
 4. Install IIS URL Rewrite and Application Request Routing, including the proxy module.
-5. Install 64 bit Node.js 24 LTS and Git. Confirm `node --version`, `npm --version`, and `git --version` in an elevated PowerShell session.
+5. Install 64 bit Node.js 24 LTS and Git. If another application requires an older machine wide Node.js version, extract the official Node.js 24 ZIP to a dedicated runtime directory instead. Confirm the selected Node.js 24 executable, its adjacent `npm.cmd`, and Git in an elevated PowerShell session.
 6. Permit inbound TCP 443 through the Azure network security group and Windows Firewall. Do not expose TCP 3000; Node binds to loopback only.
 
 ### 2. Install the repository
@@ -71,12 +71,23 @@ Restrict access to `.env`, the database, backups, and logs to VM administrators 
 
 ### 3. Install IIS application and scheduled task
 
-Run:
+Run this when Node.js 24 is the machine wide version:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\deployment\windows\install-live-edits.ps1 -IisSiteName 'Default Web Site'
 ```
+
+If the VM retains an older machine wide Node.js version for another application, select the isolated runtime explicitly:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\deployment\windows\install-live-edits.ps1 `
+  -IisSiteName 'Default Web Site' `
+  -NodePath 'E:\runtimes\node-v24.18.1-win-x64\node.exe'
+```
+
+The installer uses `npm.cmd` beside the selected executable and records the absolute Node.js path in the Live Edits scheduled task. Other applications continue using the machine wide runtime.
 
 The script performs a clean production dependency install, initializes or migrates the database, creates the `/live-edits` IIS application, enables ARR proxying, registers a startup task under `SYSTEM`, starts it, and checks `http://127.0.0.1:3000/healthz`.
 
