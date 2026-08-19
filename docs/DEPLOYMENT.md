@@ -89,7 +89,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 The installer uses `npm.cmd` beside the selected executable and records the absolute Node.js path in the Live Edits scheduled task. Other applications continue using the machine wide runtime.
 
-The script performs a clean production dependency install, initializes or migrates the database, creates the `/live-edits` IIS application, enables ARR proxying, registers a startup task under `SYSTEM`, starts it, and checks `http://127.0.0.1:3000/healthz`.
+The script performs a clean production dependency install, initializes or migrates the database, confirms the IIS WebSocket module, creates the `/live-edits` IIS application, enables ARR proxying, registers a startup task under `SYSTEM`, starts it, and waits up to 30 seconds for `http://127.0.0.1:3000/healthz`. WebSocket support is enabled as a Windows feature and inherited by the application; `server/web.config` does not override the server level WebSocket section because hardened IIS installations commonly lock it at the parent level.
 
 If the TEST VM uses another IIS site, pass its exact name. If IIS is managed separately, pass `-SkipIis` and configure an application rooted at `E:\live-edits\server` using the checked in `server\web.config`.
 

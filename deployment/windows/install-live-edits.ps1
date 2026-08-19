@@ -48,6 +48,8 @@ if (-not $SkipIis) {
   Import-Module WebAdministration -ErrorAction Stop
   $rewrite = Get-WebGlobalModule | Where-Object Name -eq 'RewriteModule'
   if (-not $rewrite) { throw 'IIS URL Rewrite is not installed.' }
+  $webSocket = Get-WebGlobalModule | Where-Object Name -eq 'WebSocketModule'
+  if (-not $webSocket) { throw 'The IIS WebSocket Protocol feature is not installed.' }
 
   $site = Get-Website -Name $IisSiteName -ErrorAction Stop
   $applicationName = $ApplicationPath.Trim('/')
@@ -74,9 +76,21 @@ $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccou
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
 
-Start-Sleep -Seconds 3
-$health = Invoke-RestMethod -Uri 'http://127.0.0.1:3000/healthz' -TimeoutSec 10
-if ($health.status -ne 'ok') { throw 'The local health check did not return ok.' }
+$health = $null
+$healthError = $null
+for ($attempt = 1; $attempt -le 15; $attempt += 1) {
+  try {
+    $health = Invoke-RestMethod -Uri 'http://127.0.0.1:3000/healthz' -TimeoutSec 3
+    if ($health.status -eq 'ok') { break }
+    $healthError = "The local health endpoint returned status '$($health.status)'."
+  } catch {
+    $healthError = $_.Exception.Message
+  }
+  if ($attempt -lt 15) { Start-Sleep -Seconds 2 }
+}
+if ($health.status -ne 'ok') {
+  throw "The local service did not become healthy within 30 seconds. Last error: $healthError"
+}
 
 Write-Host "Live Edits installed. Local health status: $($health.status)"
 Write-Host "Verify the public endpoint: https://test.infobase-dev.com/live-edits/healthz"
