@@ -1,23 +1,27 @@
 {
-  "name": "live-edits-server",
-  "version": "3.0.0",
-  "description": "Backend server for Live Edits v3",
+  "name": "health-infobase-live-edits-server",
+  "version": "4.0.0",
+  "description": "Backend API for Health Infobase Live Edits",
+  "private": true,
   "main": "src/index.js",
   "type": "module",
+  "engines": {
+    "node": ">=24.18.1 <25"
+  },
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "init-db": "node src/init-db.js"
+    "init-db": "node src/init-db.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "express": "^4.21.1",
-    "socket.io": "^4.8.1",
-    "better-sqlite3": "^11.7.0",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.7",
-    "express-rate-limit": "^7.1.5"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0"
+    "better-sqlite3": "13.0.3",
+    "cors": "2.8.6",
+    "dotenv": "17.4.2",
+    "express": "5.2.1",
+    "express-rate-limit": "8.6.2",
+    "helmet": "8.3.0",
+    "sanitize-html": "2.17.7",
+    "socket.io": "4.8.3"
   }
 }

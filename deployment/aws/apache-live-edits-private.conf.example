@@ -1,0 +1,14 @@
+# Optional defense for unpublished or sensitive preview HTML.
+# Install after apache-live-edits.conf as:
+#   /etc/httpd/conf.d/zz-live-edits-private.conf
+#
+# Create /etc/httpd/live-edits.htpasswd with a separate password. Do not reuse
+# EDITOR_TOKEN or ADMIN_TOKEN in Apache configuration.
+
+<DirectoryMatch "^/home/ec2-user/environment/wwwroot/_live-edits/v4/products(?:/|$)">
+    AuthType Basic
+    AuthName "Health Infobase Live Edits Preview"
+    AuthBasicProvider file
+    AuthUserFile /etc/httpd/live-edits.htpasswd
+    Require valid-user
+</DirectoryMatch>

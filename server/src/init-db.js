@@ -1,29 +1,12 @@
-/**
- * Database Initialization Script
- * 
- * Creates the SQLite database and tables if they don't exist.
- * Run this once before starting the server for the first time.
- * 
- * Usage: npm run init-db
- */
-
+import { loadConfig } from './config.js';
 import { initDatabase } from './database.js';
 
-console.log('Initializing database...');
-
 try {
-  const db = initDatabase();
-  console.log('✅ Database initialized successfully!');
-  console.log('📊 Database location:', process.env.DB_PATH || './database.db');
-  
-  // Test query
-  const testQuery = db.prepare('SELECT COUNT(*) as count FROM projects');
-  const result = testQuery.get();
-  console.log(`📈 Current projects: ${result.count}`);
-  
+  const config = loadConfig();
+  const db = await initDatabase(config);
   db.close();
-  process.exit(0);
+  console.log(`Database initialized: ${config.dbPath}`);
 } catch (error) {
-  console.error('❌ Error initializing database:', error);
-  process.exit(1);
+  console.error(`Database initialization failed: ${error.message}`);
+  process.exitCode = 1;
 }

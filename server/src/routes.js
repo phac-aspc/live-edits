@@ -1,596 +1,316 @@
+import { Router } from 'express';
 import { generateId } from './database.js';
 import {
-  validateProjectInput,
-  validateEditInput,
-  validateCommentInput,
-  validateUUID,
+  contentHash,
+  httpError,
+  validateCommentPosition,
+  validateEditPayload,
+  validateElementKey,
+  validateId,
+  validateName,
+  validateOrigin,
   validatePath,
-  sanitizeError
+  validateSiteKey
 } from './security.js';
 
-/**
- * API Routes for Express server
- */
-export function setupRoutes(app, db) {
-  // Health check
-  app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: Date.now() });
+function pageRoom(projectId, pagePath) {
+  return `page:${projectId}:${pagePath}`;
+}
+
+function assertPageInProject(project, pagePath) {
+  const normalized = validatePath(pagePath, 'page_path');
+  if (project.project_path !== '/' && normalized !== project.project_path && !normalized.startsWith(`${project.project_path}/`)) {
+    httpError('page_path is outside this project.', 400);
+  }
+  return normalized;
+}
+
+function projectOr404(db, projectId) {
+  validateId(projectId, 'project id');
+  const project = db.prepare('SELECT * FROM projects WHERE id = ? AND status = ?').get(projectId, 'active');
+  if (!project) httpError('Project not found.', 404);
+  return project;
+}
+
+function pageRegistrationOr404(db, project, pagePath) {
+  const normalized = assertPageInProject(project, pagePath);
+  const page = db.prepare('SELECT * FROM project_pages WHERE project_id = ? AND page_path = ?')
+    .get(project.id, normalized);
+  if (!page) httpError('Page is not registered. Run setup for this project again.', 404);
+  return { ...page, element_keys: JSON.parse(page.element_keys) };
+}
+
+function editResponse(row) {
+  return row ? { ...row, payload: JSON.parse(row.payload) } : null;
+}
+
+function emit(request, room, event, body) {
+  request.app.locals.io?.to(room).emit(event, body);
+}
+
+export function createRoutes(db, config, editorAuth, adminAuth) {
+  const router = Router();
+
+  router.get('/projects', adminAuth, (request, response) => {
+    const projects = db.prepare('SELECT * FROM projects ORDER BY site_key, name').all();
+    response.json(projects);
   });
 
-  // Debug route to see what Express receives
-  app.get('/debug', (req, res) => {
-    res.json({
-      url: req.url,
-      originalUrl: req.originalUrl,
-      path: req.path,
-      baseUrl: req.baseUrl,
-      method: req.method
+  router.post('/projects', adminAuth, (request, response) => {
+    const siteKey = validateSiteKey(request.body?.site_key);
+    const projectPath = validatePath(request.body?.project_path, 'project_path');
+    const name = validateName(request.body?.name, 'name', 80);
+    const origin = validateOrigin(request.body?.origin);
+    const now = Date.now();
+    const existing = db.prepare('SELECT * FROM projects WHERE site_key = ? AND project_path = ?').get(siteKey, projectPath);
+    if (existing) {
+      db.prepare('UPDATE projects SET name = ?, origin = ?, status = ?, updated_at = ? WHERE id = ?')
+        .run(name, origin, 'active', now, existing.id);
+      return response.json({ ...existing, name, origin, status: 'active', updated_at: now });
+    }
+    const project = {
+      id: generateId(), site_key: siteKey, project_path: projectPath, name, origin,
+      status: 'active', created_at: now, updated_at: now
+    };
+    db.prepare(`
+      INSERT INTO projects (id, site_key, project_path, name, origin, status, created_at, updated_at)
+      VALUES (@id, @site_key, @project_path, @name, @origin, @status, @created_at, @updated_at)
+    `).run(project);
+    return response.status(201).json(project);
+  });
+
+  router.get('/projects/lookup', editorAuth, (request, response) => {
+    const siteKey = validateSiteKey(request.query.site_key);
+    const projectPath = validatePath(request.query.project_path, 'project_path');
+    const project = db.prepare(`
+      SELECT id, site_key, project_path, name, origin, status, created_at, updated_at
+      FROM projects WHERE site_key = ? AND project_path = ? AND status = 'active'
+    `).get(siteKey, projectPath);
+    if (!project) httpError('Project not found.', 404);
+    response.json(project);
+  });
+
+  router.post('/projects/:projectId/pages/register', adminAuth, (request, response) => {
+    const project = projectOr404(db, request.params.projectId);
+    if (!Array.isArray(request.body?.pages) || request.body.pages.length < 1 || request.body.pages.length > 5000) {
+      httpError('pages must contain 1 to 5000 page manifests.');
+    }
+    const now = Date.now();
+    const pages = request.body.pages.map((page) => {
+      const pagePath = assertPageInProject(project, page?.page_path);
+      if (!Array.isArray(page?.element_keys) || page.element_keys.length < 1 || page.element_keys.length > 2000) {
+        httpError(`Invalid element_keys for ${pagePath}.`);
+      }
+      const elementKeys = [...new Set(page.element_keys.map(validateElementKey))].sort();
+      if (elementKeys.length !== page.element_keys.length) httpError(`Duplicate element key in ${pagePath}.`);
+      const elementKeysJson = JSON.stringify(elementKeys);
+      return {
+        project_id: project.id, page_path: pagePath,
+        manifest_hash: contentHash(elementKeysJson), element_keys: elementKeysJson, updated_at: now
+      };
+    });
+    const upsert = db.prepare(`
+      INSERT INTO project_pages (project_id, page_path, manifest_hash, element_keys, updated_at)
+      VALUES (@project_id, @page_path, @manifest_hash, @element_keys, @updated_at)
+      ON CONFLICT(project_id, page_path) DO UPDATE SET
+        manifest_hash = excluded.manifest_hash,
+        element_keys = excluded.element_keys,
+        updated_at = excluded.updated_at
+    `);
+    db.transaction(() => pages.forEach((page) => upsert.run(page)))();
+    response.json({ pages: pages.map((page) => ({ ...page, element_keys: JSON.parse(page.element_keys) })) });
+  });
+
+  router.get('/projects/:projectId/pages/latest', editorAuth, (request, response) => {
+    const project = projectOr404(db, request.params.projectId);
+    const page = pageRegistrationOr404(db, project, request.query.page_path);
+    const latest = db.prepare(`
+      SELECT * FROM edits WHERE project_id = ? AND page_path = ? ORDER BY revision DESC LIMIT 1
+    `).get(project.id, page.page_path);
+    const compatible = latest?.manifest_hash === page.manifest_hash ? latest : null;
+    response.json(editResponse(compatible) || {
+      project_id: project.id,
+      page_path: page.page_path,
+      payload_version: 1,
+      payload: { version: 1, elements: {} },
+      manifest_hash: page.manifest_hash,
+      revision: latest?.revision || 0,
+      created_at: null,
+      edited_by: null,
+      stale: Boolean(latest)
     });
   });
 
-  // Get all projects (handle both with and without trailing slash)
-  app.get('/projects', (req, res) => {
-    try {
-      const getAllProjects = db.prepare('SELECT * FROM projects ORDER BY created_at DESC');
-      const projects = getAllProjects.all();
-      res.json(projects);
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to get projects');
-      res.status(500).json({ error: errorMessage });
-    }
+  router.get('/projects/:projectId/pages/history', editorAuth, (request, response) => {
+    const project = projectOr404(db, request.params.projectId);
+    const page = pageRegistrationOr404(db, project, request.query.page_path);
+    const requestedLimit = Number.parseInt(request.query.limit || config.historyLimit, 10);
+    const limit = Math.min(Math.max(Number.isInteger(requestedLimit) ? requestedLimit : config.historyLimit, 1), config.historyLimit);
+    const rows = db.prepare(`
+      SELECT * FROM edits
+      WHERE project_id = ? AND page_path = ? AND manifest_hash = ?
+      ORDER BY revision DESC LIMIT ?
+    `).all(project.id, page.page_path, page.manifest_hash, limit);
+    response.json(rows.map(editResponse));
   });
 
-  app.get('/projects/', (req, res) => {
-    try {
-      const getAllProjects = db.prepare('SELECT * FROM projects ORDER BY created_at DESC');
-      const projects = getAllProjects.all();
-      res.json(projects);
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to get projects');
-      res.status(500).json({ error: errorMessage });
+  router.post('/projects/:projectId/edits', editorAuth, (request, response) => {
+    const project = projectOr404(db, request.params.projectId);
+    const page = pageRegistrationOr404(db, project, request.body?.page_path);
+    const pagePath = page.page_path;
+    const editedBy = validateName(request.body?.edited_by, 'edited_by', 100);
+    const baseRevision = Number(request.body?.base_revision);
+    if (!Number.isInteger(baseRevision) || baseRevision < 0) httpError('base_revision must be a nonnegative integer.');
+    const { payload, json } = validateEditPayload(request.body?.payload, config.maxEditBytes);
+    const actualKeys = Object.keys(payload.elements).sort();
+    if (JSON.stringify(actualKeys) !== JSON.stringify(page.element_keys)) {
+      httpError('payload keys do not match the registered page manifest. Refresh the staged page.', 409);
     }
+
+    const save = db.transaction(() => {
+      const latest = db.prepare(`
+        SELECT * FROM edits WHERE project_id = ? AND page_path = ? ORDER BY revision DESC LIMIT 1
+      `).get(project.id, pagePath);
+      const currentRevision = latest?.revision || 0;
+      if (baseRevision !== currentRevision) {
+        const error = new Error('The page was changed by another editor.');
+        error.status = 409;
+        error.details = { latest: editResponse(latest) };
+        throw error;
+      }
+      const row = {
+        id: generateId(), project_id: project.id, page_path: pagePath, manifest_hash: page.manifest_hash,
+        payload_version: payload.version, payload: json, content_hash: contentHash(json),
+        edited_by: editedBy, revision: currentRevision + 1, created_at: Date.now(), published_at: null
+      };
+      db.prepare(`
+        INSERT INTO edits (
+          id, project_id, page_path, manifest_hash, payload_version, payload, content_hash,
+          edited_by, revision, created_at, published_at
+        ) VALUES (
+          @id, @project_id, @page_path, @manifest_hash, @payload_version, @payload, @content_hash,
+          @edited_by, @revision, @created_at, @published_at
+        )
+      `).run(row);
+      return row;
+    });
+
+    const saved = editResponse(save());
+    emit(request, pageRoom(project.id, pagePath), 'edit-saved', saved);
+    response.status(201).json(saved);
   });
 
-  // Register a new project
-  app.post('/projects', (req, res) => {
-    // Validate and sanitize input
-    const validation = validateProjectInput(req.body);
-    if (!validation.valid) {
-      return res.status(400).json({ error: validation.errors.join(', ') });
-    }
-
-    const { folder_path, name } = validation.sanitized;
-    
-    try {
-      const projectId = generateId();
-      const now = Date.now();
-
-      const insert = db.prepare(`
-        INSERT INTO projects (id, folder_path, name, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-      `);
-
-      insert.run(projectId, folder_path, name, now, now);
-
-      res.json({
-        id: projectId,
-        folder_path,
-        name,
-        created_at: now
-      });
-    } catch (error) {
-      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-        // Project already exists, return existing
-        const getProject = db.prepare('SELECT * FROM projects WHERE folder_path = ?');
-        const project = getProject.get(folder_path);
-        return res.json(project);
-      }
-      const errorMessage = sanitizeError(error, 'Failed to register project');
-      res.status(500).json({ error: errorMessage });
-    }
+  router.get('/projects/:projectId/edits/latest', adminAuth, (request, response) => {
+    const project = projectOr404(db, request.params.projectId);
+    const rows = db.prepare(`
+      SELECT e.* FROM edits e
+      JOIN project_pages page
+        ON page.project_id = e.project_id
+        AND page.page_path = e.page_path
+        AND page.manifest_hash = e.manifest_hash
+      WHERE e.project_id = ? AND e.published_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM edits newer
+          WHERE newer.project_id = e.project_id
+            AND newer.page_path = e.page_path
+            AND newer.revision > e.revision
+        )
+      ORDER BY e.page_path
+    `).all(project.id);
+    response.json(rows.map(editResponse));
   });
 
-  // Get project by folder path (using regex to handle paths with slashes)
-  // This route must come AFTER /projects (the list route) but BEFORE other routes
-  app.get(/^\/projects\/(.+)$/, (req, res) => {
-    try {
-      console.log('Project route matched:', { path: req.path, url: req.url, originalUrl: req.originalUrl });
-      
-      // Extract folder path from the URL path
-      // Try req.path first (Express may have decoded it), then fallback to req.url
-      let match = req.path.match(/^\/projects\/(.+)$/);
-      if (!match) {
-        match = req.url.match(/^\/projects\/(.+)$/);
-      }
-      if (!match && req.originalUrl) {
-        match = req.originalUrl.match(/^\/projects\/(.+)$/);
-      }
-      
-      if (!match || !match[1]) {
-        console.log('No match found:', { path: req.path, url: req.url, originalUrl: req.originalUrl });
-        return res.status(400).json({ error: 'folder_path is required', path: req.path, url: req.url, originalUrl: req.originalUrl });
-      }
-      
-      let folderPath = decodeURIComponent(match[1]);
-      console.log('Decoded folder path (before normalization):', folderPath);
-      
-      // Use same sanitization as POST to ensure consistency
-      // Remove path traversal attempts
-      folderPath = folderPath.replace(/\.\./g, '');
-      // Remove dangerous characters
-      folderPath = folderPath.replace(/[<>:"|?*\x00-\x1f]/g, '');
-      // Normalize slashes
-      folderPath = folderPath.replace(/\\/g, '/');
-      folderPath = folderPath.replace(/\/+/g, '/');
-      // Remove leading/trailing slashes then ensure leading slash
-      folderPath = folderPath.replace(/^\/+|\/+$/g, '');
-      if (!folderPath.startsWith('/')) {
-        folderPath = '/' + folderPath;
-      }
-      console.log('Normalized folder path:', folderPath);
-      
-      const getProject = db.prepare('SELECT * FROM projects WHERE folder_path = ?');
-      let project = getProject.get(folderPath);
-
-      if (!project) {
-        console.log('Project not found in database for path:', folderPath);
-        // Try without leading slash as fallback (for backwards compatibility)
-        const folderPathNoSlash = folderPath.startsWith('/') ? folderPath.slice(1) : folderPath;
-        project = getProject.get(folderPathNoSlash);
-        if (project) {
-          console.log('Project found without leading slash');
-          return res.json(project);
-        }
-        // Try with original decoded path (for backwards compatibility with existing data)
-        const originalPath = decodeURIComponent(match[1]);
-        project = getProject.get(originalPath);
-        if (project) {
-          console.log('Project found with original path format');
-          return res.json(project);
-        }
-        // Try original path without leading slash
-        const originalPathNoSlash = originalPath.startsWith('/') ? originalPath.slice(1) : originalPath;
-        project = getProject.get(originalPathNoSlash);
-        if (project) {
-          console.log('Project found with original path format (no leading slash)');
-          return res.json(project);
-        }
-        return res.status(404).json({ error: 'Project not found' });
-      }
-
-      console.log('Project found:', project.id);
-      res.json(project);
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to get project');
-      res.status(500).json({ error: errorMessage });
+  router.post('/projects/:projectId/publish', adminAuth, (request, response) => {
+    const project = projectOr404(db, request.params.projectId);
+    const operationId = validateId(request.body?.operation_id, 'operation_id');
+    const publishedBy = validateName(request.body?.published_by, 'published_by', 100);
+    const existingEvent = db.prepare('SELECT * FROM publish_events WHERE operation_id = ? AND project_id = ?')
+      .get(operationId, project.id);
+    if (existingEvent) {
+      return response.json({ ...existingEvent, pages: JSON.parse(existingEvent.pages), replayed: true });
     }
+    if (!Array.isArray(request.body?.pages) || request.body.pages.length < 1 || request.body.pages.length > 1000) {
+      httpError('pages must contain 1 to 1000 published page revisions.');
+    }
+    const pages = request.body.pages.map((page) => {
+      const pagePath = assertPageInProject(project, page?.page_path);
+      const revision = Number(page?.revision);
+      if (!Number.isInteger(revision) || revision < 1) httpError('Each published revision must be a positive integer.');
+      return { page_path: pagePath, revision };
+    });
+    const now = Date.now();
+    const event = db.transaction(() => {
+      for (const page of pages) {
+        const result = db.prepare(`
+          UPDATE edits SET published_at = ?
+          WHERE project_id = ? AND page_path = ? AND revision = ? AND published_at IS NULL
+        `).run(now, project.id, page.page_path, page.revision);
+        if (result.changes !== 1) httpError(`Edit revision not found: ${page.page_path} r${page.revision}.`, 409);
+      }
+      const audit = {
+        id: generateId(), operation_id: operationId, project_id: project.id, published_by: publishedBy,
+        pages: JSON.stringify(pages), created_at: now
+      };
+      db.prepare(`
+        INSERT INTO publish_events (id, operation_id, project_id, published_by, pages, created_at)
+        VALUES (@id, @operation_id, @project_id, @published_by, @pages, @created_at)
+      `).run(audit);
+      return audit;
+    })();
+    response.status(201).json({ ...event, pages });
   });
 
-  // Save edit (latest HTML content for a page)
-  app.post('/edits', (req, res) => {
-    try {
-      // Validate and sanitize input
-      const validation = validateEditInput(req.body);
-      if (!validation.valid) {
-        return res.status(400).json({ error: validation.errors.join(', ') });
-      }
-
-      const { project_id, page_path, html_content, edited_by } = validation.sanitized;
-
-      console.log('Saving edit:', {
-        project_id,
-        page_path,
-        contentLength: html_content.length,
-        edited_by
-      });
-
-      const editId = generateId();
-      const now = Date.now();
-
-      const insert = db.prepare(`
-        INSERT INTO edits (id, project_id, page_path, html_content, edited_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `);
-
-      insert.run(editId, project_id, page_path, html_content, edited_by, now);
-      
-      console.log('Edit saved successfully:', { id: editId, page_path, created_at: now });
-
-      res.json({
-        id: editId,
-        project_id,
-        page_path,
-        edited_by,
-        created_at: now
-      });
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to save edit');
-      res.status(500).json({ error: errorMessage });
-    }
+  router.get('/projects/:projectId/comments', editorAuth, (request, response) => {
+    const project = projectOr404(db, request.params.projectId);
+    const pagePath = pageRegistrationOr404(db, project, request.query.page_path).page_path;
+    const comments = db.prepare(`
+      SELECT * FROM comments WHERE project_id = ? AND page_path = ? ORDER BY resolved, created_at
+    `).all(project.id, pagePath).map((comment) => ({ ...comment, resolved: Boolean(comment.resolved) }));
+    response.json(comments);
   });
 
-  // Get edit history for a specific page (all edits, not just latest)
-  // MUST come BEFORE the general /edits/:projectId/:pagePath route
-  app.get(/^\/edits\/history\/(.+)$/, (req, res) => {
-    try {
-      console.log('History route matched:', { path: req.path, url: req.url, originalUrl: req.originalUrl });
-      
-      // Extract everything after /edits/history/
-      let afterHistory = null;
-      let match = req.path.match(/^\/edits\/history\/(.+)$/);
-      if (match) {
-        afterHistory = match[1];
-      } else {
-        match = req.url.match(/^\/edits\/history\/(.+)$/);
-        if (match) afterHistory = match[1];
-      }
-      if (!afterHistory && req.originalUrl) {
-        match = req.originalUrl.match(/^\/edits\/history\/(.+)$/);
-        if (match) afterHistory = match[1];
-      }
-      
-      if (!afterHistory) {
-        console.log('No match found in history route:', { path: req.path, url: req.url, originalUrl: req.originalUrl });
-        return res.status(400).json({ error: 'Invalid history route format', path: req.path, url: req.url, originalUrl: req.originalUrl });
-      }
-      
-      // Decode and normalize the path
-      afterHistory = decodeURIComponent(afterHistory);
-      // Handle double slashes and normalize
-      afterHistory = afterHistory.replace(/^\/+/, '/');
-      
-      // Split on first slash: projectId/pagePath
-      const firstSlashIndex = afterHistory.indexOf('/');
-      if (firstSlashIndex === -1) {
-        return res.status(400).json({ error: 'Invalid format: expected projectId/pagePath' });
-      }
-      
-      const projectId = afterHistory.substring(0, firstSlashIndex);
-      let decodedPagePath = afterHistory.substring(firstSlashIndex);
-      
-      // Validate projectId (UUID)
-      const projectIdValidation = validateUUID(projectId, 'projectId');
-      if (!projectIdValidation.valid) {
-        return res.status(400).json({ error: projectIdValidation.error });
-      }
-      
-      // Validate and sanitize page path
-      const pagePathValidation = validatePath(decodedPagePath, 'page_path');
-      if (!pagePathValidation.valid) {
-        return res.status(400).json({ error: pagePathValidation.error });
-      }
-      
-      decodedPagePath = pagePathValidation.sanitized;
-      console.log('Getting edit history:', { projectId, decodedPagePath });
-
-      // Get last 5 edits with full content for revert functionality
-      const getAllEdits = db.prepare(`
-        SELECT id, project_id, page_path, edited_by, created_at, html_content, LENGTH(html_content) as content_length
-        FROM edits 
-        WHERE project_id = ? AND page_path = ?
-        ORDER BY created_at DESC
-        LIMIT 5
-      `);
-
-      const edits = getAllEdits.all(projectId, decodedPagePath);
-      
-      console.log('Found edits:', edits.length);
-      
-      // Try without leading slash as fallback
-      if (edits.length === 0 && decodedPagePath.startsWith('/')) {
-        const editsAlt = getAllEdits.all(projectId, decodedPagePath.slice(1));
-        if (editsAlt.length > 0) {
-          console.log('Found edits without leading slash');
-          return res.json(editsAlt);
-        }
-      }
-      
-      if (edits.length === 0) {
-        return res.status(404).json({ error: 'No edits found', searchedProjectId: projectId, searchedPagePath: decodedPagePath });
-      }
-
-      res.json(edits);
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to get edit history');
-      res.status(500).json({ error: errorMessage });
-    }
+  router.post('/projects/:projectId/comments', editorAuth, (request, response) => {
+    const project = projectOr404(db, request.params.projectId);
+    const page = pageRegistrationOr404(db, project, request.body?.page_path);
+    const pagePath = page.page_path;
+    const elementKey = validateElementKey(request.body?.element_key);
+    if (!page.element_keys.includes(elementKey)) httpError('element_key is not registered for this page.', 409);
+    const now = Date.now();
+    const comment = {
+      id: generateId(), project_id: project.id, page_path: pagePath,
+      element_key: elementKey,
+      offset_x: validateCommentPosition(request.body?.offset_x, 'offset_x'),
+      offset_y: validateCommentPosition(request.body?.offset_y, 'offset_y'),
+      comment_text: validateName(request.body?.comment_text, 'comment_text', 2000),
+      author: validateName(request.body?.author, 'author', 100),
+      resolved: 0, created_at: now, updated_at: now
+    };
+    db.prepare(`
+      INSERT INTO comments (
+        id, project_id, page_path, element_key, offset_x, offset_y,
+        comment_text, author, resolved, created_at, updated_at
+      ) VALUES (
+        @id, @project_id, @page_path, @element_key, @offset_x, @offset_y,
+        @comment_text, @author, @resolved, @created_at, @updated_at
+      )
+    `).run(comment);
+    const body = { ...comment, resolved: false };
+    emit(request, pageRoom(project.id, pagePath), 'comment-created', body);
+    response.status(201).json(body);
   });
 
-  // Get a specific edit by ID
-  app.get('/edits/by-id/:editId', (req, res) => {
-    try {
-      const { editId } = req.params;
-      
-      // Validate editId (UUID)
-      const editIdValidation = validateUUID(editId, 'editId');
-      if (!editIdValidation.valid) {
-        return res.status(400).json({ error: editIdValidation.error });
-      }
-      
-      console.log('Getting edit by ID:', editId);
-
-      const getEdit = db.prepare('SELECT * FROM edits WHERE id = ?');
-      const edit = getEdit.get(editId);
-
-      if (!edit) {
-        return res.status(404).json({ error: 'Edit not found' });
-      }
-
-      console.log('Edit found:', { id: edit.id, project_id: edit.project_id, page_path: edit.page_path, created_at: edit.created_at });
-      res.json(edit);
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to get edit');
-      res.status(500).json({ error: errorMessage });
-    }
+  router.patch('/projects/:projectId/comments/:commentId', editorAuth, (request, response) => {
+    const project = projectOr404(db, request.params.projectId);
+    const commentId = validateId(request.params.commentId, 'comment id');
+    if (typeof request.body?.resolved !== 'boolean') httpError('resolved must be a boolean.');
+    const current = db.prepare('SELECT * FROM comments WHERE id = ? AND project_id = ?').get(commentId, project.id);
+    if (!current) httpError('Comment not found.', 404);
+    db.prepare('UPDATE comments SET resolved = ?, updated_at = ? WHERE id = ?')
+      .run(request.body.resolved ? 1 : 0, Date.now(), commentId);
+    const updated = { ...current, resolved: request.body.resolved, updated_at: Date.now() };
+    emit(request, pageRoom(project.id, current.page_path), 'comment-updated', updated);
+    response.json(updated);
   });
 
-  // Get all edits for a project (for publish/export)
-  // MUST come BEFORE the general regex route below to ensure it matches first
-  app.get('/edits/project/:projectId', (req, res) => {
-    try {
-      const { projectId } = req.params;
-      
-      // Validate projectId (UUID)
-      const projectIdValidation = validateUUID(projectId, 'projectId');
-      if (!projectIdValidation.valid) {
-        return res.status(400).json({ error: projectIdValidation.error });
-      }
-
-      console.log('Getting all edits for project:', projectId);
-
-      const getAll = db.prepare(`
-        SELECT * FROM edits 
-        WHERE project_id = ?
-        ORDER BY page_path, created_at DESC
-      `);
-
-      const edits = getAll.all(projectId);
-      console.log(`Found ${edits.length} edit(s) for project ${projectId}`);
-
-      // Group by page_path and get latest for each
-      const latestByPage = {};
-      edits.forEach(edit => {
-        if (!latestByPage[edit.page_path]) {
-          latestByPage[edit.page_path] = edit;
-        }
-      });
-
-      const result = Object.values(latestByPage);
-      console.log(`Returning ${result.length} unique page(s) with edits`);
-      res.json(result);
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to get edits');
-      res.status(500).json({ error: errorMessage });
-    }
-  });
-
-  // Get latest edit for a page (using regex to handle page paths with slashes)
-  // MUST come AFTER the /edits/project/:projectId route above
-  app.get(/^\/edits\/([^/]+)\/(.+)$/, (req, res) => {
-    try {
-      // Skip if this is a history or project route (handled by specific routes above)
-      const pathToCheck = req.path || req.url || req.originalUrl || '';
-      if (pathToCheck.includes('/edits/history/') || pathToCheck.includes('/edits/project/')) {
-        // Don't handle - let it fall through (though Express doesn't support fallthrough)
-        // Instead, return 404 to indicate route not found
-        return res.status(404).json({ error: 'Route not found - use /edits/history/ for history' });
-      }
-      
-      console.log('Edit route matched:', { path: req.path, url: req.url, originalUrl: req.originalUrl });
-      
-      // Extract projectId and pagePath from the regex match
-      let match = req.path.match(/^\/edits\/([^/]+)\/(.+)$/);
-      if (!match) {
-        match = req.url.match(/^\/edits\/([^/]+)\/(.+)$/);
-      }
-      if (!match && req.originalUrl) {
-        match = req.originalUrl.match(/^\/edits\/([^/]+)\/(.+)$/);
-      }
-      
-      // Double-check it's not history or project
-      if (match && (match[1] === 'history' || match[1] === 'project')) {
-        return res.status(404).json({ error: 'Route not found' });
-      }
-      
-      if (!match || !match[1] || !match[2]) {
-        console.log('No match found:', { path: req.path, url: req.url, originalUrl: req.originalUrl });
-        return res.status(400).json({ error: 'projectId and pagePath are required', path: req.path, url: req.url, originalUrl: req.originalUrl });
-      }
-      
-      const projectId = match[1];
-      let decodedPagePath = decodeURIComponent(match[2]);
-      
-      // Validate projectId (UUID)
-      const projectIdValidation = validateUUID(projectId, 'projectId');
-      if (!projectIdValidation.valid) {
-        return res.status(400).json({ error: projectIdValidation.error });
-      }
-      
-      // Validate and sanitize page path
-      const pagePathValidation = validatePath(decodedPagePath, 'page_path');
-      if (!pagePathValidation.valid) {
-        return res.status(400).json({ error: pagePathValidation.error });
-      }
-      
-      decodedPagePath = pagePathValidation.sanitized;
-      console.log('Normalized page path:', decodedPagePath);
-
-      const getLatest = db.prepare(`
-        SELECT * FROM edits 
-        WHERE project_id = ? AND page_path = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-      `);
-
-      const edit = getLatest.get(projectId, decodedPagePath);
-      
-      console.log('Edit query result:', edit ? { id: edit.id, page_path: edit.page_path, created_at: edit.created_at } : 'not found');
-      
-      // Try without leading slash as fallback
-      if (!edit && decodedPagePath.startsWith('/')) {
-        const editAlt = getLatest.get(projectId, decodedPagePath.slice(1));
-        if (editAlt) {
-          console.log('Edit found without leading slash');
-          return res.json(editAlt);
-        }
-      }
-
-      if (!edit) {
-        return res.status(404).json({ error: 'No edits found', searchedProjectId: projectId, searchedPagePath: decodedPagePath });
-      }
-
-      res.json(edit);
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to get edit');
-      res.status(500).json({ error: errorMessage });
-    }
-  });
-
-  // Add comment
-  app.post('/comments', (req, res) => {
-    try {
-      // Validate and sanitize input
-      const validation = validateCommentInput(req.body);
-      if (!validation.valid) {
-        return res.status(400).json({ error: validation.errors.join(', ') });
-      }
-
-      const { project_id, page_path, x_position, y_position, comment_text, author } = validation.sanitized;
-
-      const commentId = generateId();
-      const now = Date.now();
-
-      const insert = db.prepare(`
-        INSERT INTO comments (id, project_id, page_path, x_position, y_position, comment_text, author, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      // x_position and y_position are now percentages (0-100) instead of pixels
-      insert.run(commentId, project_id, page_path, x_position, y_position, comment_text, author, now);
-
-      res.json({
-        id: commentId,
-        project_id,
-        page_path,
-        comment_text,
-        author,
-        created_at: now
-      });
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to add comment');
-      res.status(500).json({ error: errorMessage });
-    }
-  });
-
-  // Get comments for a page (using regex to handle page paths with slashes)
-  app.get(/^\/comments\/([^/]+)\/(.+)$/, (req, res) => {
-    try {
-      let match = req.path.match(/^\/comments\/([^/]+)\/(.+)$/);
-      if (!match) {
-        match = req.url.match(/^\/comments\/([^/]+)\/(.+)$/);
-      }
-      
-      if (!match || !match[1] || !match[2]) {
-        return res.status(400).json({ error: 'projectId and pagePath are required' });
-      }
-      
-      const projectId = match[1];
-      let decodedPagePath = decodeURIComponent(match[2]);
-      
-      // Validate projectId (UUID)
-      const projectIdValidation = validateUUID(projectId, 'projectId');
-      if (!projectIdValidation.valid) {
-        return res.status(400).json({ error: projectIdValidation.error });
-      }
-      
-      // Validate and sanitize page path
-      const pagePathValidation = validatePath(decodedPagePath, 'page_path');
-      if (!pagePathValidation.valid) {
-        return res.status(400).json({ error: pagePathValidation.error });
-      }
-      
-      decodedPagePath = pagePathValidation.sanitized;
-
-      const getComments = db.prepare(`
-        SELECT * FROM comments 
-        WHERE project_id = ? AND page_path = ?
-        ORDER BY created_at DESC
-      `);
-
-      const comments = getComments.all(projectId, decodedPagePath);
-      res.json(comments);
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to get comments');
-      res.status(500).json({ error: errorMessage });
-    }
-  });
-
-  // Delete comment
-  app.delete('/comments/:commentId', (req, res) => {
-    try {
-      const { commentId } = req.params;
-      
-      // Validate commentId (UUID)
-      const commentIdValidation = validateUUID(commentId, 'commentId');
-      if (!commentIdValidation.valid) {
-        return res.status(400).json({ error: commentIdValidation.error });
-      }
-
-      const deleteComment = db.prepare('DELETE FROM comments WHERE id = ?');
-      const result = deleteComment.run(commentId);
-
-      if (result.changes === 0) {
-        return res.status(404).json({ error: 'Comment not found' });
-      }
-
-      res.json({ success: true });
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to delete comment');
-      res.status(500).json({ error: errorMessage });
-    }
-  });
-
-  // Get presence (active users) for a page (using regex to handle page paths with slashes)
-  app.get(/^\/presence\/([^/]+)\/(.+)$/, (req, res) => {
-    try {
-      let match = req.path.match(/^\/presence\/([^/]+)\/(.+)$/);
-      if (!match) {
-        match = req.url.match(/^\/presence\/([^/]+)\/(.+)$/);
-      }
-      
-      if (!match || !match[1] || !match[2]) {
-        return res.status(400).json({ error: 'projectId and pagePath are required' });
-      }
-      
-      const projectId = match[1];
-      let decodedPagePath = decodeURIComponent(match[2]);
-      
-      // Validate projectId (UUID)
-      const projectIdValidation = validateUUID(projectId, 'projectId');
-      if (!projectIdValidation.valid) {
-        return res.status(400).json({ error: projectIdValidation.error });
-      }
-      
-      // Validate and sanitize page path
-      const pagePathValidation = validatePath(decodedPagePath, 'page_path');
-      if (!pagePathValidation.valid) {
-        return res.status(400).json({ error: pagePathValidation.error });
-      }
-      
-      decodedPagePath = pagePathValidation.sanitized;
-
-      const getPresence = db.prepare(`
-        SELECT DISTINCT user_id, user_name, MAX(last_seen) as last_seen
-        FROM presence 
-        WHERE project_id = ? AND page_path = ? AND last_seen > ? - 30000
-        GROUP BY user_id, user_name
-      `);
-
-      const presence = getPresence.all(projectId, decodedPagePath, Date.now());
-      res.json(presence);
-    } catch (error) {
-      const errorMessage = sanitizeError(error, 'Failed to get presence');
-      res.status(500).json({ error: errorMessage });
-    }
-  });
+  return router;
 }

@@ -1,102 +1,135 @@
 import Database from 'better-sqlite3';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { existsSync } from 'fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+function tableExists(db, name) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+}
 
-const DB_PATH = process.env.DB_PATH || join(__dirname, '../database.db');
+function tableColumns(db, name) {
+  return tableExists(db, name) ? db.pragma(`table_info(${name})`).map(({ name: column }) => column) : [];
+}
 
-/**
- * Initialize database connection and create tables if they don't exist
- */
-export function initDatabase() {
-  const db = new Database(DB_PATH);
-  
-  // Enable foreign keys
+async function archiveLegacySchema(db, dbPath) {
+  if (!tableExists(db, 'projects') || tableColumns(db, 'projects').includes('site_key')) return;
+  if (tableExists(db, 'legacy_projects_v3')) {
+    throw new Error('Both legacy and version 4 tables exist. Restore the database backup and resolve the migration manually.');
+  }
+
+  const backupPath = `${dbPath}.v3-backup-${new Date().toISOString().replaceAll(':', '-')}`;
+  await db.backup(backupPath);
+  db.pragma('foreign_keys = OFF');
+  db.transaction(() => {
+    for (const table of ['projects', 'edits', 'comments', 'presence']) {
+      if (tableExists(db, table)) db.exec(`ALTER TABLE ${table} RENAME TO legacy_${table}_v3`);
+    }
+  })();
   db.pragma('foreign_keys = ON');
-  
-  // Create tables
+  console.warn(`Version 3 tables were archived in place. Database backup: ${backupPath}`);
+}
+
+function createSchema(db) {
   db.exec(`
-    -- Projects table
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY,
-      folder_path TEXT UNIQUE NOT NULL,
+      site_key TEXT NOT NULL CHECK (site_key IN ('en', 'fr')),
+      project_path TEXT NOT NULL,
       name TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
-      status TEXT DEFAULT 'active'
+      UNIQUE (site_key, project_path)
     );
 
-    -- Edits table (stores HTML content snapshots)
     CREATE TABLE IF NOT EXISTS edits (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
       page_path TEXT NOT NULL,
-      html_content TEXT NOT NULL,
+      manifest_hash TEXT NOT NULL,
+      payload_version INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
       edited_by TEXT NOT NULL,
+      revision INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
+      published_at INTEGER,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      UNIQUE (project_id, page_path, revision)
+    );
+
+    CREATE TABLE IF NOT EXISTS project_pages (
+      project_id TEXT NOT NULL,
+      page_path TEXT NOT NULL,
+      manifest_hash TEXT NOT NULL,
+      element_keys TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (project_id, page_path),
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
 
-    -- Comments table
     CREATE TABLE IF NOT EXISTS comments (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
       page_path TEXT NOT NULL,
-      x_position REAL NOT NULL,
-      y_position REAL NOT NULL,
+      element_key TEXT NOT NULL,
+      offset_x REAL NOT NULL CHECK (offset_x BETWEEN 0 AND 1),
+      offset_y REAL NOT NULL CHECK (offset_y BETWEEN 0 AND 1),
       comment_text TEXT NOT NULL,
       author TEXT NOT NULL,
+      resolved INTEGER NOT NULL DEFAULT 0 CHECK (resolved IN (0, 1)),
       created_at INTEGER NOT NULL,
-      resolved INTEGER DEFAULT 0,
+      updated_at INTEGER NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
-    
-    -- Migrate existing INTEGER positions to REAL (percentage-based)
-    -- This will run if columns are already INTEGER type
-    -- Note: SQLite doesn't support ALTER COLUMN, so we'll handle this in application code
 
-    -- Presence table (active users)
-    CREATE TABLE IF NOT EXISTS presence (
+    CREATE TABLE IF NOT EXISTS publish_events (
       id TEXT PRIMARY KEY,
+      operation_id TEXT NOT NULL UNIQUE,
       project_id TEXT NOT NULL,
-      page_path TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      user_name TEXT NOT NULL,
-      last_seen INTEGER NOT NULL,
+      published_by TEXT NOT NULL,
+      pages TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
 
-    -- Create indexes for performance
-    CREATE INDEX IF NOT EXISTS idx_edits_project_page ON edits(project_id, page_path);
-    CREATE INDEX IF NOT EXISTS idx_edits_created_at ON edits(created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_comments_project_page ON comments(project_id, page_path);
-    CREATE INDEX IF NOT EXISTS idx_presence_project_page ON presence(project_id, page_path);
-    CREATE INDEX IF NOT EXISTS idx_presence_last_seen ON presence(last_seen);
+    CREATE INDEX IF NOT EXISTS v4_edits_project_page_revision
+      ON edits(project_id, page_path, revision DESC);
+    CREATE INDEX IF NOT EXISTS v4_edits_unpublished
+      ON edits(project_id, published_at, page_path);
+    CREATE INDEX IF NOT EXISTS v4_comments_project_page
+      ON comments(project_id, page_path, resolved, created_at);
   `);
-
-  // Clean up stale presence (older than 30 seconds)
-  const cleanupStalePresence = db.prepare(`
-    DELETE FROM presence WHERE last_seen < ? - 30000
+  if (!tableColumns(db, 'edits').includes('manifest_hash')) {
+    db.exec("ALTER TABLE edits ADD COLUMN manifest_hash TEXT NOT NULL DEFAULT 'legacy'");
+  }
+  if (!tableColumns(db, 'publish_events').includes('operation_id')) {
+    db.exec('ALTER TABLE publish_events ADD COLUMN operation_id TEXT');
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS v4_publish_events_operation
+      ON publish_events(operation_id);
+    CREATE INDEX IF NOT EXISTS v4_publish_events_project
+      ON publish_events(project_id, created_at DESC);
   `);
+  db.pragma('user_version = 4');
+}
 
-  // Run cleanup every 30 seconds
-  setInterval(() => {
-    cleanupStalePresence.run(Date.now());
-  }, 30000);
-
+export async function initDatabase(config) {
+  mkdirSync(dirname(config.dbPath), { recursive: true });
+  const existed = existsSync(config.dbPath);
+  const db = new Database(config.dbPath);
+  db.pragma('busy_timeout = 5000');
+  db.pragma('foreign_keys = ON');
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+  if (existed) await archiveLegacySchema(db, config.dbPath);
+  createSchema(db);
+  db.prepare('SELECT 1').get();
   return db;
 }
 
-/**
- * Generate UUID v4
- */
 export function generateId() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
+  return randomUUID();
 }
