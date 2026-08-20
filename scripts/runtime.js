@@ -134,7 +134,13 @@ export async function apiRequest(apiBase, route, options = {}) {
     body = { message: text };
   }
   if (!response.ok) {
-    throw new Error(`API ${response.status}: ${body?.error || body?.message || response.statusText}`);
+    const error = new Error(`API ${response.status}: ${body?.error || body?.message || response.statusText}`);
+    error.status = response.status;
+    if (body && typeof body === 'object') {
+      const { error: privateError, message: privateMessage, ...details } = body;
+      error.details = details;
+    }
+    throw error;
   }
   return body;
 }

@@ -22,6 +22,14 @@ The C9 service scans top-level folders in both locale web roots, skips known pri
 
 Setup copies public files into a hidden build directory, excludes private and executable content, rejects symlinks, annotates safe edit regions, injects explicit deployment data, installs the shared widget, atomically replaces the preview, registers the project and page manifests in Azure, and writes private C9 state.
 
+## Project lifecycle
+
+Archival is coordinated by the C9 admin service. It validates the project, moves the staged preview and private configuration into `state/project-archives/`, optionally moves a temporary source folder, and patches Azure to `status=archived` and `review_status=closed`. Local moves are rolled back if Azure rejects the transition. Active dashboard discovery excludes archived paths.
+
+Restoration returns an archived source when applicable and runs the normal setup path against the current source. Azure reactivates the existing registration, page manifests are refreshed, and review remains closed. A restored archive manifest is retained as lifecycle history but removed from the active Archived Projects list.
+
+Permanent deletion is a distinct Azure administrator operation. It requires 30 days in archived state, closed review, no compatible unpublished edits, no unresolved comments, the exact project name, and a separate `DELETE` confirmation. Foreign keys cascade through project pages, edits, comments, and publishing events. C9 records a private purge receipt before removing the local archive.
+
 ## Reviewer identity and permissions
 
 In network mode, the widget sends the self-reported name and email on each API request and realtime handshake. Middleware validates both before route handling. The database stores email beside the edit or comment, while public response serializers deliberately remove it.

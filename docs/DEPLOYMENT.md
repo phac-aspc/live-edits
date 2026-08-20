@@ -1,6 +1,6 @@
 # Deployment guide
 
-Version 4.1 changes both Azure TEST and C9. Use a three-phase rollout: deploy the Azure 4.1 code while temporarily retaining editor token mode, deploy C9 and refresh the shared widget, then switch Azure to network reviewer mode. This keeps the existing staged pages usable throughout the rollout.
+Version 4.2 changes both Azure TEST and C9. For a fresh installation, use a three-phase rollout: deploy Azure while temporarily retaining editor token mode, deploy C9 and refresh the shared widget, then switch Azure to network reviewer mode. For an existing 4.1 network-mode installation, update Azure first and C9 second while preserving the existing environment, database, state, and secrets.
 
 ## Deployment map
 
@@ -64,11 +64,11 @@ curl.exe -i https://test.infobase-dev.com/live-edits/healthz
 curl.exe -i https://test.infobase-dev.com/live-edits/api/v1/auth/config
 ```
 
-Health must report `4.1.0`; auth config must still report `token`. Existing staged projects must continue accepting the existing editor token. An unauthenticated `/api/v1/projects` request must return `401` because that is an administrator route.
+Health must report `4.2.0`; auth config must still report `token`. Existing staged projects must continue accepting the existing editor token. An unauthenticated `/api/v1/projects` request must return `401` because that is an administrator route.
 
 ## 3. Deploy C9 second
 
-Place the 4.1 release in `/home/ec2-user/environment/tools/live-edits` while preserving `state/`. This can be done from an approved release archive; Git connectivity and `.git` metadata are not required. Install the locked root dependencies with the isolated Node 24 `npm`.
+Place the 4.2 release in `/home/ec2-user/environment/tools/live-edits` while preserving `state/`. This can be done from an approved release archive; Git connectivity and `.git` metadata are not required. Install the locked root dependencies with the isolated Node 24 `npm`.
 
 Create `/etc/live-edits/admin.env` from `deployment/aws/live-edits-admin.env.example`. Put the existing Azure `ADMIN_TOKEN` and the new, different console passphrase in this root-owned `0600` file. Do not put either value in the repository, C9 project settings, Apache configuration, or web root.
 
@@ -99,14 +99,14 @@ curl -kfsS --resolve 'en.infobase-dev.com:443:127.0.0.1' \
   https://en.infobase-dev.com/_live-edits/v4/admin/healthz
 ```
 
-The virtual-host listing must match the pre-deployment record. The new public health path must return `4.1.0` only while connected through the approved network.
+The virtual-host listing must match the pre-deployment record. The new public health path must return `4.2.0` only while connected through the approved network.
 
-## 4. Install the shared 4.1 widget
+## 4. Install the shared 4.2 files
 
 1. Open `https://en.infobase-dev.com/_live-edits/v4/admin/`.
 2. Sign in with the new console passphrase.
 3. Confirm existing C9 projects appear with Azure counts and links.
-4. Use **Refresh staging** on the smoke-test project. Setup copies the 4.1 widget to the shared widget URL used by all staged projects.
+4. Use **Refresh staging** on a controlled project when the widget changes. Setup copies the release widget to the shared widget URL used by all staged projects.
 5. Open its preview and confirm the existing access code still works during this compatibility phase.
 
 ## 5. Enable network reviewer mode

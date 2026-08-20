@@ -10,6 +10,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync
 } from 'node:fs';
 import { basename, dirname, extname, relative, resolve } from 'node:path';
@@ -199,7 +200,14 @@ async function main() {
       pagePath,
       widgetUrl: `${origin}${widgetPath}`
     });
-    writeFileSync(file, stagedHtml, 'utf8');
+    if (!stagedHtml.trim()) throw new Error(`Staging generated an empty HTML page: ${relativeFile}`);
+    const temporaryFile = `${file}.live-edits-write-${process.pid}`;
+    writeFileSync(temporaryFile, stagedHtml, { encoding: 'utf8', mode: 0o640 });
+    if (statSync(temporaryFile).size !== Buffer.byteLength(stagedHtml)) {
+      rmSync(temporaryFile, { force: true });
+      throw new Error(`Staging could not verify the generated HTML page: ${relativeFile}`);
+    }
+    renameSync(temporaryFile, file);
     keyCount += annotated.keys.length;
   }
 

@@ -2,7 +2,7 @@
 
 ## Network-trusted reviewer access
 
-The intended version 4.1 deployment uses `EDITOR_AUTH_MODE=network`. Reviewer API routes no longer require a shared access code, so the organizational VPN/network boundary is the primary access control for previews, HTTP APIs, and realtime connections.
+The intended version 4.2 deployment uses `EDITOR_AUTH_MODE=network`. Reviewer API routes no longer require a shared access code, so the organizational VPN/network boundary is the primary access control for previews, HTTP APIs, and realtime connections.
 
 This mode is appropriate only when all of these statements are true:
 
@@ -34,6 +34,10 @@ Projects have independent lifecycle values:
 * `review_status=open|closed` controls reviewer access.
 
 Closing review immediately blocks lookup, page data, saves, comments, and realtime room joins while retaining all project data. Program reviewers have no registration, refresh, project-state, activity, publish, or archive permissions.
+
+Archival is available only through an authenticated admin session with origin and CSRF validation. It requires typed project-name confirmation, closes review, and stores moved files below private state. Moving a source folder is a separate unchecked option intended only for disposable test products. Normal archival never modifies or removes source.
+
+Permanent deletion is restricted to archived projects after 30 days. It requires two confirmations and is blocked by unpublished edits or unresolved comments. The Azure administrator API enforces these rules independently of the browser. Database backups and private purge records remain operational responsibilities.
 
 ## Content and publishing safety
 

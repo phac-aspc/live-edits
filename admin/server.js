@@ -2,9 +2,19 @@
 
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { createReadStream, existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import {
+  cpSync,
+  createReadStream,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync
+} from 'node:fs';
 import { createServer } from 'node:http';
-import { basename, extname, resolve } from 'node:path';
+import { basename, dirname, extname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_API_BASE,
@@ -18,11 +28,13 @@ import {
   readJson,
   sha256,
   stateDirectory,
-  toUrlPath
+  toUrlPath,
+  writeJson
 } from '../scripts/runtime.js';
 
 const PUBLIC_DIRECTORY = resolve(REPO_ROOT, 'admin', 'public');
 const COOKIE_NAME = 'live_edits_admin_session';
+const ARCHIVE_SCHEMA_VERSION = 1;
 const EXCLUDED_CANDIDATES = new Set([
   '.git', '.svn', '.live-edits', '_backups', '_live-edits', 'node_modules', 'state'
 ]);
@@ -239,6 +251,97 @@ function readLocalProjects(config) {
   return projects;
 }
 
+function archiveRoot(config) {
+  return resolve(config.stateDirectory, 'project-archives');
+}
+
+function archiveTimestamp() {
+  return new Date().toISOString().replace(/[-:.]/g, '');
+}
+
+function archiveId(config, directory) {
+  return Buffer.from(relative(archiveRoot(config), directory)).toString('base64url');
+}
+
+function archiveDirectory(config, id) {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{4,500}$/.test(id)) {
+    throw Object.assign(new Error('Invalid archive identifier.'), { status: 400 });
+  }
+  let relativePath;
+  try {
+    relativePath = Buffer.from(id, 'base64url').toString('utf8');
+  } catch {
+    throw Object.assign(new Error('Invalid archive identifier.'), { status: 400 });
+  }
+  if (!relativePath || relativePath.includes('\0')) {
+    throw Object.assign(new Error('Invalid archive identifier.'), { status: 400 });
+  }
+  return assertContained(archiveRoot(config), resolve(archiveRoot(config), relativePath), 'Project archive');
+}
+
+function archiveRecord(config, directory) {
+  const manifestPath = resolve(directory, 'manifest.json');
+  if (!existsSync(manifestPath)) return null;
+  const manifest = readJson(manifestPath);
+  return {
+    ...manifest,
+    archive_id: archiveId(config, directory),
+    archive_directory: directory,
+    manifest_path: manifestPath
+  };
+}
+
+function readProjectArchives(config) {
+  const root = archiveRoot(config);
+  if (!existsSync(root)) return [];
+  const records = [];
+  for (const siteEntry of readdirSync(root, { withFileTypes: true })) {
+    if (!siteEntry.isDirectory()) continue;
+    const siteDirectory = resolve(root, siteEntry.name);
+    for (const projectEntry of readdirSync(siteDirectory, { withFileTypes: true })) {
+      if (!projectEntry.isDirectory()) continue;
+      const projectDirectory = resolve(siteDirectory, projectEntry.name);
+      for (const timestampEntry of readdirSync(projectDirectory, { withFileTypes: true })) {
+        if (!timestampEntry.isDirectory()) continue;
+        try {
+          const record = archiveRecord(config, resolve(projectDirectory, timestampEntry.name));
+          if (record) records.push(record);
+        } catch (error) {
+          records.push({
+            status: 'invalid', site_key: siteEntry.name, project_name: projectEntry.name,
+            archived_at: null, local_error: `Archive manifest is invalid: ${error.message}`
+          });
+        }
+      }
+    }
+  }
+  return records.sort((a, b) => (b.archived_at || '').localeCompare(a.archived_at || ''));
+}
+
+function movePath(source, destination) {
+  if (!existsSync(source)) return false;
+  if (existsSync(destination)) {
+    throw Object.assign(new Error(`Archive destination already exists: ${destination}`), { status: 409 });
+  }
+  mkdirSync(dirname(destination), { recursive: true });
+  try {
+    renameSync(source, destination);
+  } catch (error) {
+    if (error.code !== 'EXDEV') throw error;
+    cpSync(source, destination, { recursive: true, errorOnExist: true, force: false });
+    rmSync(source, { recursive: true, force: true });
+  }
+  return true;
+}
+
+function rollbackMoves(moves) {
+  for (const move of [...moves].reverse()) {
+    if (existsSync(move.destination) && !existsSync(move.source)) {
+      movePath(move.destination, move.source);
+    }
+  }
+}
+
 function sourceState(project) {
   if (!project.source_path || !project.source_hashes) return 'unknown';
   try {
@@ -255,6 +358,7 @@ function sourceState(project) {
 
 async function dashboard(config) {
   const [localProjects, candidates] = [readLocalProjects(config), discoverCandidates(config)];
+  const localArchives = readProjectArchives(config).filter((archive) => archive.status === 'archived');
   let remoteProjects = [];
   let apiError = null;
   try {
@@ -265,17 +369,21 @@ async function dashboard(config) {
   const configured = new Set(localProjects.map((project) => `${project.site_key}:${project.project_path}`));
   const remoteById = new Map(remoteProjects.map((project) => [project.id, project]));
   const remoteByPath = new Map(remoteProjects.map((project) => [`${project.site_key}:${project.project_path}`, project]));
+  const archivedPaths = new Set(localArchives.map((archive) => `${archive.site_key}:${archive.project_path}`));
+  for (const remote of remoteProjects.filter((project) => project.status === 'archived')) {
+    archivedPaths.add(`${remote.site_key}:${remote.project_path}`);
+  }
   const projects = localProjects.map((local) => {
     const remote = remoteById.get(local.project_id) || remoteByPath.get(`${local.site_key}:${local.project_path}`) || null;
     return {
       ...local,
       source_state: sourceState(local),
       remote,
-      state: local.local_error ? 'invalid-local-config' : (remote ? 'ready' : 'not-registered')
+      state: local.local_error ? 'invalid-local-config' : (remote?.status === 'archived' ? 'archived' : (remote ? 'ready' : 'not-registered'))
     };
-  });
+  }).filter((project) => project.state !== 'archived');
   const localIds = new Set(localProjects.map((project) => project.project_id).filter(Boolean));
-  for (const remote of remoteProjects) {
+  for (const remote of remoteProjects.filter((project) => project.status !== 'archived')) {
     if (!localIds.has(remote.id) && !configured.has(`${remote.site_key}:${remote.project_path}`)) {
       projects.push({
         project_name: remote.name, site_key: remote.site_key, project_path: remote.project_path,
@@ -283,11 +391,33 @@ async function dashboard(config) {
       });
     }
   }
+  const archives = localArchives.map((archive) => {
+    const remote = remoteById.get(archive.project_id)
+      || remoteByPath.get(`${archive.site_key}:${archive.project_path}`)
+      || null;
+    const { archive_directory: privateDirectory, manifest_path: privateManifest, ...publicArchive } = archive;
+    return { ...publicArchive, remote, state: remote ? 'archived' : 'archive-only' };
+  });
+  const archivedLocalIds = new Set(localArchives.map((archive) => archive.project_id).filter(Boolean));
+  for (const remote of remoteProjects.filter((project) => project.status === 'archived')) {
+    if (!archivedLocalIds.has(remote.id)) {
+      archives.push({
+        archive_id: null, project_id: remote.id, project_name: remote.name,
+        site_key: remote.site_key, project_path: remote.project_path,
+        archived_at: new Date(remote.updated_at).toISOString(), source_archived: false,
+        remote, state: 'remote-only'
+      });
+    }
+  }
   return {
     generated_at: new Date().toISOString(),
     api: { ok: !apiError, error: apiError },
-    candidates: candidates.filter((candidate) => !configured.has(`${candidate.site_key}:${candidate.project_path}`)),
-    projects: projects.sort((a, b) => `${a.site_key}:${a.project_name}`.localeCompare(`${b.site_key}:${b.project_name}`))
+    candidates: candidates.filter((candidate) => (
+      !configured.has(`${candidate.site_key}:${candidate.project_path}`)
+      && !archivedPaths.has(`${candidate.site_key}:${candidate.project_path}`)
+    )),
+    projects: projects.sort((a, b) => `${a.site_key}:${a.project_name}`.localeCompare(`${b.site_key}:${b.project_name}`)),
+    archives: archives.sort((a, b) => (b.archived_at || '').localeCompare(a.archived_at || ''))
   };
 }
 
@@ -333,6 +463,177 @@ function runScript(config, script, args) {
   });
 }
 
+async function archiveProjectLifecycle(config, project, archivedBy, options) {
+  const site = config.siteDefaults[project.site_key];
+  const sourcePath = assertContained(site.webRoot, resolve(project.source_path), 'Source folder');
+  const previewPath = assertContained(
+    site.stagingRoot,
+    resolve(site.stagingRoot, 'products', project.site_key, project.project_name),
+    'Staged preview'
+  );
+  const configPath = assertContained(
+    resolve(config.stateDirectory, 'projects', project.site_key),
+    resolve(config.stateDirectory, 'projects', project.site_key, `${project.project_name}.json`),
+    'Project config'
+  );
+  if (!existsSync(configPath)) {
+    throw Object.assign(new Error('Private project configuration was not found.'), { status: 404 });
+  }
+  if (options.archiveSource && !existsSync(sourcePath)) {
+    throw Object.assign(new Error('The source folder cannot be archived because it was not found.'), { status: 409 });
+  }
+  const remoteProjects = await apiRequest(config.apiBase, '/api/v1/projects', { token: config.adminToken });
+  const remote = remoteProjects.find((entry) => (
+    entry.id === project.project_id
+    || (entry.site_key === project.site_key && entry.project_path === project.project_path)
+  ));
+  if (!remote) throw Object.assign(new Error('Azure project registration was not found.'), { status: 409 });
+  if (remote.status !== 'active') throw Object.assign(new Error('Only active projects can be archived.'), { status: 409 });
+
+  const directory = resolve(
+    archiveRoot(config), project.site_key, project.project_name, archiveTimestamp()
+  );
+  if (existsSync(directory)) throw Object.assign(new Error('A project archive with this timestamp already exists.'), { status: 409 });
+  mkdirSync(directory, { recursive: true });
+  const manifestPath = resolve(directory, 'manifest.json');
+  const manifest = {
+    schema_version: ARCHIVE_SCHEMA_VERSION,
+    status: 'archiving',
+    project_id: remote.id,
+    project_name: project.project_name,
+    site_key: project.site_key,
+    project_path: project.project_path,
+    source_path: sourcePath,
+    web_root: project.web_root,
+    staging_root: project.staging_root,
+    preview_path: project.preview_path,
+    preview_url: project.preview_url,
+    public_url: project.public_url,
+    source_archived: Boolean(options.archiveSource),
+    archived_by: archivedBy,
+    archived_at: new Date().toISOString(),
+    azure_before: {
+      status: remote.status,
+      review_status: remote.review_status,
+      page_count: remote.page_count,
+      unpublished_pages: remote.unpublished_pages,
+      unresolved_comments: remote.unresolved_comments,
+      last_edit_at: remote.last_edit_at,
+      last_published_at: remote.last_published_at
+    }
+  };
+  writeJson(manifestPath, manifest);
+
+  const moves = [];
+  const move = (source, destination, required = false) => {
+    const moved = movePath(source, destination);
+    if (required && !moved) throw Object.assign(new Error(`Required project path was not found: ${source}`), { status: 409 });
+    if (moved) moves.push({ source, destination });
+  };
+  let remoteChanged = false;
+  try {
+    move(previewPath, resolve(directory, 'preview'));
+    if (options.archiveSource) move(sourcePath, resolve(directory, 'source'), true);
+    move(configPath, resolve(directory, 'project.json'), true);
+    const archivedRemote = await apiRequest(
+      config.apiBase,
+      `/api/v1/projects/${encodeURIComponent(remote.id)}`,
+      {
+        method: 'PATCH', token: config.adminToken,
+        body: { status: 'archived', review_status: 'closed' }
+      }
+    );
+    remoteChanged = true;
+    writeJson(manifestPath, { ...manifest, status: 'archived', azure_after: archivedRemote });
+    return {
+      archived: true,
+      archive_id: archiveId(config, directory),
+      project_name: project.project_name,
+      site_key: project.site_key,
+      source_archived: Boolean(options.archiveSource),
+      archived_at: manifest.archived_at
+    };
+  } catch (error) {
+    if (remoteChanged) {
+      await apiRequest(config.apiBase, `/api/v1/projects/${encodeURIComponent(remote.id)}`, {
+        method: 'PATCH', token: config.adminToken,
+        body: { status: remote.status, review_status: remote.review_status }
+      }).catch(() => {});
+    }
+    rollbackMoves(moves);
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function restoreProjectLifecycle(config, record, restoredBy) {
+  if (record.status !== 'archived') {
+    throw Object.assign(new Error('Only archived projects can be restored.'), { status: 409 });
+  }
+  const siteKey = assertSiteKey(record.site_key);
+  const projectName = assertSimpleName(record.project_name, 'Project name');
+  const site = config.siteDefaults[siteKey];
+  const sourcePath = assertContained(site.webRoot, resolve(record.source_path), 'Source folder');
+  const archivedSource = resolve(record.archive_directory, 'source');
+  const liveConfigPath = resolve(config.stateDirectory, 'projects', siteKey, `${projectName}.json`);
+  const livePreviewPath = resolve(site.stagingRoot, 'products', siteKey, projectName);
+  if (existsSync(liveConfigPath) || existsSync(livePreviewPath)) {
+    throw Object.assign(new Error('An active configuration or preview already exists for this project.'), { status: 409 });
+  }
+  if (existsSync(archivedSource) && existsSync(sourcePath)) {
+    throw Object.assign(new Error('Both the archived and original source folders exist. Resolve the duplicate before restoring.'), { status: 409 });
+  }
+  if (existsSync(archivedSource)) movePath(archivedSource, sourcePath);
+  if (!existsSync(sourcePath) || !lstatSync(sourcePath).isDirectory()) {
+    throw Object.assign(new Error('The source folder was not found and cannot be restored.'), { status: 409 });
+  }
+  const result = await runScript(config, 'setup-product.js', [
+    '--site', siteKey, '--source', sourcePath, '--name', projectName,
+    '--web-root', site.webRoot, '--staging-root', site.stagingRoot,
+    '--origin', site.origin, '--api-base', config.apiBase
+  ]);
+  writeJson(record.manifest_path, {
+    ...readJson(record.manifest_path),
+    status: 'restored', restored_by: restoredBy, restored_at: new Date().toISOString()
+  });
+  return { restored: true, project_name: projectName, site_key: siteKey, ...result };
+}
+
+async function purgeProjectLifecycle(config, record, purgedBy, body) {
+  if (record.status !== 'archived') {
+    throw Object.assign(new Error('Only archived projects can be permanently deleted.'), { status: 409 });
+  }
+  if (!record.project_id) {
+    throw Object.assign(new Error('The Azure project identifier is missing from the archive.'), { status: 409 });
+  }
+  const deleted = await apiRequest(
+    config.apiBase,
+    `/api/v1/projects/${encodeURIComponent(record.project_id)}`,
+    {
+      method: 'DELETE', token: config.adminToken,
+      body: { confirmation: body.confirmation, delete_confirmation: body.delete_confirmation }
+    }
+  );
+  const purgeRecord = {
+    schema_version: 1,
+    project_id: record.project_id,
+    project_name: record.project_name,
+    site_key: record.site_key,
+    project_path: record.project_path,
+    source_archived: record.source_archived,
+    archived_at: record.archived_at,
+    purged_by: purgedBy,
+    purged_at: new Date().toISOString(),
+    azure_result: deleted
+  };
+  writeJson(
+    resolve(config.stateDirectory, 'project-purge-records', record.site_key, `${record.project_name}-${archiveTimestamp()}.json`),
+    purgeRecord
+  );
+  rmSync(record.archive_directory, { recursive: true, force: true });
+  return { purged: true, project_name: record.project_name, site_key: record.site_key };
+}
+
 function staticResponse(request, response) {
   const definition = STATIC_FILES.get(new URL(request.url, 'http://localhost').pathname);
   if (!definition) return false;
@@ -360,7 +661,7 @@ export function createAdminServer(config = loadAdminConfig()) {
     const url = new URL(request.url, 'http://localhost');
     try {
       if (request.method === 'GET' && url.pathname === '/healthz') {
-        return json(response, 200, { status: 'ok', version: '4.1.0' });
+        return json(response, 200, { status: 'ok', version: '4.2.0' });
       }
       if (request.method === 'POST' && url.pathname === '/api/login') {
         verifyOrigin(request, config);
@@ -424,7 +725,7 @@ export function createAdminServer(config = loadAdminConfig()) {
         }
       }
 
-      const match = url.pathname.match(/^\/api\/projects\/(en|fr)\/([A-Za-z0-9][A-Za-z0-9._-]{0,79})\/(refresh|dry-run|publish|review|activity)$/);
+      const match = url.pathname.match(/^\/api\/projects\/(en|fr)\/([A-Za-z0-9][A-Za-z0-9._-]{0,79})\/(refresh|dry-run|publish|review|activity|archive)$/);
       if (match) {
         const [, siteKey, projectName, action] = match;
         const project = projectConfig(config, siteKey, projectName);
@@ -466,6 +767,18 @@ export function createAdminServer(config = loadAdminConfig()) {
             const result = await runScript(config, 'publish-product.js', ['--site', siteKey, '--name', projectName]);
             return json(response, 200, result);
           }
+          if (action === 'archive') {
+            if (body.confirmation !== projectName) {
+              throw Object.assign(new Error(`Enter ${projectName} to confirm archival.`), { status: 400 });
+            }
+            if (body.archive_source !== undefined && typeof body.archive_source !== 'boolean') {
+              throw Object.assign(new Error('archive_source must be a boolean.'), { status: 400 });
+            }
+            const result = await archiveProjectLifecycle(config, project, session.name, {
+              archiveSource: Boolean(body.archive_source)
+            });
+            return json(response, 200, result);
+          }
           if (body.confirmation !== projectName) {
             throw Object.assign(new Error(`Enter ${projectName} to confirm publication.`), { status: 400 });
           }
@@ -478,12 +791,37 @@ export function createAdminServer(config = loadAdminConfig()) {
         }
       }
 
+      const archiveMatch = url.pathname.match(/^\/api\/archives\/([A-Za-z0-9_-]{4,500})\/(restore|purge)$/);
+      if (archiveMatch) {
+        if (request.method !== 'POST') return json(response, 405, { error: 'Method not allowed.' });
+        if (activeOperation) return json(response, 409, { error: `Another operation is running: ${activeOperation}` });
+        const [, id, action] = archiveMatch;
+        const record = archiveRecord(config, archiveDirectory(config, id));
+        if (!record) throw Object.assign(new Error('Project archive was not found.'), { status: 404 });
+        const body = await readBody(request);
+        if (body.confirmation !== record.project_name) {
+          throw Object.assign(new Error(`Enter ${record.project_name} to confirm ${action}.`), { status: 400 });
+        }
+        activeOperation = `${action} ${record.site_key}:${record.project_name}`;
+        try {
+          const result = action === 'restore'
+            ? await restoreProjectLifecycle(config, record, session.name)
+            : await purgeProjectLifecycle(config, record, session.name, body);
+          return json(response, 200, result);
+        } finally {
+          activeOperation = null;
+        }
+      }
+
       if (request.method === 'GET' && staticResponse(request, response)) return;
       return json(response, 404, { error: 'Route not found.' });
     } catch (error) {
       const status = Number.isInteger(error.status) ? error.status : 500;
       if (status >= 500) console.error('Admin request failed:', error);
-      return json(response, status, { error: status >= 500 ? 'Admin operation failed.' : error.message });
+      return json(response, status, {
+        error: status >= 500 ? 'Admin operation failed.' : error.message,
+        ...(status < 500 && error.details ? error.details : {})
+      });
     }
   });
 }

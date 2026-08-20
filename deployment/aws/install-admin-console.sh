@@ -92,7 +92,17 @@ fi
 systemctl daemon-reload
 systemctl enable live-edits-admin.service
 systemctl restart live-edits-admin.service
-curl --fail --silent --show-error --max-time 10 http://127.0.0.1:3100/healthz >/dev/null
+admin_healthy='false'
+for attempt in {1..15}; do
+  if curl --fail --silent --max-time 3 http://127.0.0.1:3100/healthz >/dev/null 2>&1; then
+    admin_healthy='true'
+    break
+  fi
+  sleep 1
+done
+if [[ "$admin_healthy" != 'true' ]]; then
+  curl --fail --silent --show-error --max-time 10 http://127.0.0.1:3100/healthz >/dev/null
+fi
 systemctl reload httpd
 
 installation_succeeded='true'

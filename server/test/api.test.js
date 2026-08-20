@@ -100,6 +100,72 @@ test('API enforces roles, sanitizes edits, detects conflicts, and audits publish
   });
   assert.equal(comment.status, 201);
   assert.equal(comment.body.element_key, 'intro');
+
+  const disposable = await request('/projects', ADMIN, {
+    method: 'POST', body: {
+      site_key: 'fr', project_path: '/disposable', name: 'disposable',
+      origin: 'https://fr.infobase-dev.com'
+    }
+  });
+  const disposableId = disposable.body.id;
+  await request(`/projects/${disposableId}/pages/register`, ADMIN, {
+    method: 'POST', body: { pages: [{ page_path: '/disposable/index.html', element_keys: ['intro'] }] }
+  });
+  await request(`/projects/${disposableId}`, ADMIN, {
+    method: 'PATCH', body: { status: 'archived', review_status: 'closed' }
+  });
+  const wrongConfirmation = await request(`/projects/${disposableId}`, ADMIN, {
+    method: 'DELETE', body: { confirmation: 'wrong', delete_confirmation: 'DELETE' }
+  });
+  assert.equal(wrongConfirmation.status, 400);
+  const earlyDelete = await request(`/projects/${disposableId}`, ADMIN, {
+    method: 'DELETE', body: { confirmation: 'disposable', delete_confirmation: 'DELETE' }
+  });
+  assert.equal(earlyDelete.status, 409);
+  db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?')
+    .run(Date.now() - (31 * 24 * 60 * 60 * 1000), disposableId);
+  const deleted = await request(`/projects/${disposableId}`, ADMIN, {
+    method: 'DELETE', body: { confirmation: 'disposable', delete_confirmation: 'DELETE' }
+  });
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.body.deleted, true);
+  assert.equal(deleted.body.counts.pages, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM projects WHERE id = ?').get(disposableId).count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM project_pages WHERE project_id = ?').get(disposableId).count, 0);
+
+  const protectedProject = await request('/projects', ADMIN, {
+    method: 'POST', body: {
+      site_key: 'fr', project_path: '/protected', name: 'protected',
+      origin: 'https://fr.infobase-dev.com'
+    }
+  });
+  const protectedId = protectedProject.body.id;
+  await request(`/projects/${protectedId}/pages/register`, ADMIN, {
+    method: 'POST', body: { pages: [{ page_path: '/protected/index.html', element_keys: ['intro'] }] }
+  });
+  await request(`/projects/${protectedId}/edits`, EDITOR, {
+    method: 'POST', body: {
+      page_path: '/protected/index.html', base_revision: 0, edited_by: 'Tester',
+      payload: { version: 1, elements: { intro: 'Pending change' } }
+    }
+  });
+  await request(`/projects/${protectedId}/comments`, EDITOR, {
+    method: 'POST', body: {
+      page_path: '/protected/index.html', element_key: 'intro', offset_x: 0.25, offset_y: 0.5,
+      comment_text: 'Unresolved.', author: 'Tester'
+    }
+  });
+  await request(`/projects/${protectedId}`, ADMIN, {
+    method: 'PATCH', body: { status: 'archived', review_status: 'closed' }
+  });
+  db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?')
+    .run(Date.now() - (31 * 24 * 60 * 60 * 1000), protectedId);
+  const blockedDelete = await request(`/projects/${protectedId}`, ADMIN, {
+    method: 'DELETE', body: { confirmation: 'protected', delete_confirmation: 'DELETE' }
+  });
+  assert.equal(blockedDelete.status, 409);
+  assert.equal(blockedDelete.body.unpublished_pages, 1);
+  assert.equal(blockedDelete.body.unresolved_comments, 1);
 });
 
 test('network editor mode requires self-reported identity and respects review closure', async (context) => {

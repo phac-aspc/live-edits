@@ -1,6 +1,6 @@
 # Future changes
 
-This backlog records improvements intentionally deferred beyond version 4.1.0.
+This backlog records improvements intentionally deferred beyond version 4.2.0.
 
 ## Next release candidates
 

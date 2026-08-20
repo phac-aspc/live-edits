@@ -92,12 +92,14 @@
   function renderDashboard() {
     const data = state.dashboard;
     ui['project-count'].textContent = data.projects.length;
+    ui['archive-count'].textContent = data.archives.length;
     ui['candidate-count'].textContent = data.candidates.length;
     ui['pending-count'].textContent = data.projects.reduce((sum, project) => sum + (project.remote?.unpublished_pages || 0), 0);
     ui['comment-count'].textContent = data.projects.reduce((sum, project) => sum + (project.remote?.unresolved_comments || 0), 0);
     if (!data.api.ok) showNotice(`Azure API unavailable: ${data.api.error}`, true);
     renderProjects();
     renderCandidates();
+    renderArchives();
   }
 
   function renderProjects() {
@@ -140,7 +142,8 @@
           actionButton('Refresh staging', () => confirmRefresh(project)),
           actionButton('Dry run', () => runDryRun(project)),
           actionButton('Publish', () => beginPublish(project), 'primary'),
-          actionButton(remote?.review_status === 'open' ? 'Close review' : 'Reopen review', () => changeReview(project))
+          actionButton(remote?.review_status === 'open' ? 'Close review' : 'Reopen review', () => changeReview(project)),
+          actionButton('Archive', () => confirmArchive(project), 'danger')
         );
       }
       ui['projects-body'].append(element('tr', {}, [nameCell, reviewCell, workCell, sourceCell, element('td', {}, [actions])]));
@@ -164,6 +167,69 @@
       card.append(actionButton('Add to Live Edits', () => addProject(candidate), 'primary'));
       card.lastElementChild.disabled = !candidate.supported;
       ui['candidate-list'].append(card);
+    }
+  }
+
+  function renderArchives() {
+    const query = ui['archive-filter'].value.trim().toLowerCase();
+    const archives = state.dashboard.archives.filter((archive) => (
+      `${archive.project_name} ${archive.site_key} ${archive.project_path}`.toLowerCase().includes(query)
+    ));
+    ui['archives-body'].replaceChildren();
+    ui['no-archives'].hidden = archives.length > 0;
+    for (const archive of archives) {
+      const remote = archive.remote;
+      const purgeAt = remote?.purge_available_at || null;
+      const purgeReady = purgeAt && Date.now() >= purgeAt;
+      const workBlocksPurge = Boolean(remote?.unpublished_pages || remote?.unresolved_comments);
+      const retentionText = !remote
+        ? 'Azure record unavailable'
+        : (!purgeAt
+          ? 'Retention date unavailable'
+          : (purgeReady
+            ? (workBlocksPurge ? 'Resolve preserved work before deletion' : 'Permanent deletion available')
+            : `Protected until ${formatDate(purgeAt)}`));
+      const actions = element('div', { className: 'actions' });
+      if (archive.archive_id) {
+        actions.append(actionButton('Restore', () => confirmRestore(archive), 'primary'));
+        if (remote) {
+          const purge = actionButton('Permanently delete', () => confirmPurge(archive), 'danger');
+          purge.disabled = !purgeReady || workBlocksPurge;
+          if (workBlocksPurge) {
+            purge.title = `${remote.unpublished_pages || 0} pending page(s), ${remote.unresolved_comments || 0} unresolved comment(s)`;
+          } else if (!purgeReady && purgeAt) {
+            purge.title = `Available ${formatDate(purgeAt)}`;
+          }
+          actions.append(purge);
+        }
+      }
+      ui['archives-body'].append(element('tr', {}, [
+        element('td', {}, [
+          element('strong', { text: archive.project_name || remote?.name || 'Unknown project' }),
+          element('small', { text: `${archive.site_key?.toUpperCase() || '?'} · ${archive.project_path || 'No path'}` })
+        ]),
+        element('td', {}, [
+          element('span', { className: 'badge archived', text: archive.state.replaceAll('-', ' ') }),
+          element('small', { text: formatDate(archive.archived_at) }),
+          element('small', { text: archive.archived_by ? `By ${archive.archived_by}` : '' })
+        ]),
+        element('td', {}, [
+          element('span', { className: purgeReady ? 'retention-ready' : 'retention-wait', text: retentionText })
+        ]),
+        element('td', {}, [
+          element('strong', {
+            text: archive.state === 'remote-only'
+              ? 'No C9 archive record'
+              : (archive.source_archived ? 'Archived privately' : 'Retained in web root')
+          }),
+          element('small', {
+            text: archive.state === 'remote-only'
+              ? 'Manual recovery is required'
+              : (archive.source_archived ? 'Restored with the project' : 'Never removed')
+          })
+        ]),
+        element('td', {}, [actions])
+      ]));
     }
   }
 
@@ -251,6 +317,95 @@
     }
   }
 
+  function confirmArchive(project) {
+    const remote = project.remote || {};
+    const confirmation = element('input', {
+      type: 'text', autocomplete: 'off', placeholder: project.project_name,
+      'aria-label': `Enter ${project.project_name} to confirm archival`
+    });
+    const archiveSource = element('input', { type: 'checkbox' });
+    const archive = actionButton('Archive project', async () => {
+      archive.disabled = true;
+      try {
+        const result = await api(`projects/${projectKey(project)}/archive`, {
+          method: 'POST', timeout: 330000,
+          body: { confirmation: confirmation.value, archive_source: archiveSource.checked }
+        });
+        ui['operation-dialog'].close();
+        await loadDashboard(`${result.site_key.toUpperCase()}:${result.project_name} archived.`);
+      } catch (error) {
+        operationError(error);
+      } finally {
+        archive.disabled = false;
+      }
+    }, 'danger');
+    showOperation(`Archive ${project.project_name}`, [
+      element('p', { text: 'Archiving closes review, preserves Azure history, and moves the staged preview and private configuration out of active use.' }),
+      element('div', { className: 'warning', text: `${remote.unpublished_pages || 0} pending page(s) and ${remote.unresolved_comments || 0} unresolved comment(s) will be preserved.` }),
+      element('label', { text: `Enter ${project.project_name} to confirm` }, [confirmation]),
+      element('label', { className: 'check-field' }, [
+        archiveSource,
+        element('span', { text: 'Also move the source folder into the private archive. Use this only for smoke tests or temporary demonstrations.' })
+      ])
+    ], [actionButton('Cancel', () => ui['operation-dialog'].close()), archive]);
+  }
+
+  function confirmRestore(archive) {
+    const confirmation = element('input', {
+      type: 'text', autocomplete: 'off', placeholder: archive.project_name,
+      'aria-label': `Enter ${archive.project_name} to confirm restoration`
+    });
+    const restore = actionButton('Restore project', async () => {
+      restore.disabled = true;
+      try {
+        const result = await api(`archives/${archive.archive_id}/restore`, {
+          method: 'POST', timeout: 330000, body: { confirmation: confirmation.value }
+        });
+        ui['operation-dialog'].close();
+        await loadDashboard(result.stdout || `${result.site_key.toUpperCase()}:${result.project_name} restored.`);
+      } catch (error) {
+        operationError(error);
+      } finally {
+        restore.disabled = false;
+      }
+    }, 'primary');
+    showOperation(`Restore ${archive.project_name}`, [
+      element('p', { text: 'Restoration rebuilds staging from the current source, reactivates the Azure registration, and keeps review closed until you reopen it.' }),
+      element('label', { text: `Enter ${archive.project_name} to confirm` }, [confirmation])
+    ], [actionButton('Cancel', () => ui['operation-dialog'].close()), restore]);
+  }
+
+  function confirmPurge(archive) {
+    const confirmation = element('input', {
+      type: 'text', autocomplete: 'off', placeholder: archive.project_name,
+      'aria-label': `Enter ${archive.project_name} to confirm permanent deletion`
+    });
+    const deleteConfirmation = element('input', {
+      type: 'text', autocomplete: 'off', placeholder: 'DELETE',
+      'aria-label': 'Enter DELETE to confirm permanent deletion'
+    });
+    const purge = actionButton('Permanently delete', async () => {
+      purge.disabled = true;
+      try {
+        const result = await api(`archives/${archive.archive_id}/purge`, {
+          method: 'POST', timeout: 330000,
+          body: { confirmation: confirmation.value, delete_confirmation: deleteConfirmation.value }
+        });
+        ui['operation-dialog'].close();
+        await loadDashboard(`${result.site_key.toUpperCase()}:${result.project_name} permanently deleted.`);
+      } catch (error) {
+        operationError(error);
+      } finally {
+        purge.disabled = false;
+      }
+    }, 'danger');
+    showOperation(`Permanently delete ${archive.project_name}`, [
+      element('div', { className: 'error', text: 'This deletes the Azure history and the private project archive. It cannot be undone from the Admin Console.' }),
+      element('label', { text: `Enter ${archive.project_name}` }, [confirmation]),
+      element('label', { text: 'Enter DELETE' }, [deleteConfirmation])
+    ], [actionButton('Cancel', () => ui['operation-dialog'].close()), purge]);
+  }
+
   function changeReview(project) {
     const next = project.remote?.review_status === 'open' ? 'closed' : 'open';
     const description = next === 'closed'
@@ -331,6 +486,7 @@
   ui['refresh-dashboard'].addEventListener('click', () => loadDashboard('Dashboard refreshed.'));
   ui['project-filter'].addEventListener('input', renderProjects);
   ui['candidate-filter'].addEventListener('input', renderCandidates);
+  ui['archive-filter'].addEventListener('input', renderArchives);
   ui['login-dialog'].addEventListener('cancel', (event) => event.preventDefault());
 
   (async () => {

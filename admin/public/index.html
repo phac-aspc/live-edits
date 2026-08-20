@@ -55,6 +55,21 @@
       <div id="candidate-list" class="candidate-grid"></div>
       <p id="no-candidates" class="empty" hidden>No additional product folders were found.</p>
     </section>
+
+    <section class="panel" aria-labelledby="archives-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Retention and recovery</p><h2 id="archives-title">Archived projects <span id="archive-count">0</span></h2></div>
+        <label>Filter archives<input id="archive-filter" type="search" placeholder="Name, locale, or path"></label>
+      </div>
+      <p class="section-copy">Archived projects are closed to reviewers and removed from public staging. Their source stays in place unless it was explicitly archived as a test project.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Project</th><th>Archived</th><th>Retention</th><th>Source</th><th>Actions</th></tr></thead>
+          <tbody id="archives-body"></tbody>
+        </table>
+      </div>
+      <p id="no-archives" class="empty" hidden>No projects are archived.</p>
+    </section>
   </main>
 
   <dialog id="login-dialog">

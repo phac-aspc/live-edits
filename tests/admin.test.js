@@ -39,6 +39,14 @@ test('admin console authenticates, discovers a product, and stages it without ex
       return;
     }
     if (request.method === 'POST' && request.url === '/live-edits/api/v1/projects') {
+      const existing = remoteProjects.find((entry) => (
+        entry.site_key === body.site_key && entry.project_path === body.project_path
+      ));
+      if (existing) {
+        Object.assign(existing, body, { status: 'active', updated_at: Date.now() });
+        response.end(JSON.stringify(existing));
+        return;
+      }
       const project = {
         id: PROJECT_ID, ...body, status: 'active', review_status: 'open',
         created_at: Date.now(), updated_at: Date.now(), page_count: 0,
@@ -60,7 +68,19 @@ test('admin console authenticates, discovers a product, and stages it without ex
     }
     if (request.method === 'PATCH' && request.url === `/live-edits/api/v1/projects/${PROJECT_ID}`) {
       Object.assign(remoteProjects[0], body, { updated_at: Date.now() });
+      if (body.status === 'archived') remoteProjects[0].purge_available_at = Date.now() - 1;
+      if (body.status === 'active') delete remoteProjects[0].purge_available_at;
       response.end(JSON.stringify(remoteProjects[0]));
+      return;
+    }
+    if (request.method === 'DELETE' && request.url === `/live-edits/api/v1/projects/${PROJECT_ID}`) {
+      if (body.confirmation !== 'demo' || body.delete_confirmation !== 'DELETE') {
+        response.statusCode = 400;
+        response.end(JSON.stringify({ error: 'Confirmation failed.' }));
+        return;
+      }
+      remoteProjects.splice(0, 1);
+      response.end(JSON.stringify({ deleted: true, counts: { pages: 1, edits: 0, comments: 0, publishes: 0 } }));
       return;
     }
     if (request.method === 'GET' && request.url === `/live-edits/api/v1/projects/${PROJECT_ID}/activity`) {
@@ -165,4 +185,84 @@ test('admin console authenticates, discovers a product, and stages it without ex
   const activity = await request('/api/projects/en/demo/activity', { cookie });
   assert.equal(activity.status, 200);
   assert.deepEqual(activity.body, { edits: [], comments: [], publishes: [] });
+
+  const rejectedArchive = await request('/api/projects/en/demo/archive', {
+    method: 'POST', origin: config.publicOrigin, cookie, csrf: login.body.csrf,
+    body: { confirmation: 'wrong', archive_source: false }
+  });
+  assert.equal(rejectedArchive.status, 400);
+
+  const archived = await request('/api/projects/en/demo/archive', {
+    method: 'POST', origin: config.publicOrigin, cookie, csrf: login.body.csrf,
+    body: { confirmation: 'demo', archive_source: true }
+  });
+  assert.equal(archived.status, 200);
+  assert.equal(archived.body.source_archived, true);
+  assert.equal(existsSync(resolve(englishRoot, 'demo')), false);
+  assert.equal(existsSync(resolve(stagingRoot, 'products', 'en', 'demo')), false);
+  assert.equal(existsSync(resolve(stateRoot, 'projects', 'en', 'demo.json')), false);
+  assert.equal(remoteProjects[0].status, 'archived');
+  assert.equal(remoteProjects[0].review_status, 'closed');
+
+  const archivedDashboard = await request('/api/dashboard', { cookie });
+  assert.equal(archivedDashboard.body.projects.length, 0);
+  assert.equal(archivedDashboard.body.candidates.length, 0);
+  assert.equal(archivedDashboard.body.archives.length, 1);
+  assert.equal(archivedDashboard.body.archives[0].source_archived, true);
+
+  const restored = await request(`/api/archives/${archived.body.archive_id}/restore`, {
+    method: 'POST', origin: config.publicOrigin, cookie, csrf: login.body.csrf,
+    body: { confirmation: 'demo' }
+  });
+  assert.equal(restored.status, 200);
+  assert.equal(existsSync(resolve(englishRoot, 'demo', 'index.html')), true);
+  assert.equal(existsSync(resolve(stagingRoot, 'products', 'en', 'demo', 'index.html')), true);
+  assert.equal(existsSync(resolve(stateRoot, 'projects', 'en', 'demo.json')), true);
+  assert.equal(remoteProjects[0].status, 'active');
+  assert.equal(remoteProjects[0].review_status, 'closed');
+
+  const restoredDashboard = await request('/api/dashboard', { cookie });
+  assert.equal(restoredDashboard.body.projects.length, 1);
+  assert.equal(restoredDashboard.body.archives.length, 0);
+
+  const archivedWithSourceRetained = await request('/api/projects/en/demo/archive', {
+    method: 'POST', origin: config.publicOrigin, cookie, csrf: login.body.csrf,
+    body: { confirmation: 'demo', archive_source: false }
+  });
+  assert.equal(archivedWithSourceRetained.status, 200);
+  assert.equal(archivedWithSourceRetained.body.source_archived, false);
+  assert.equal(existsSync(resolve(englishRoot, 'demo', 'index.html')), true);
+
+  const retainedSourceDashboard = await request('/api/dashboard', { cookie });
+  assert.equal(retainedSourceDashboard.body.projects.length, 0);
+  assert.equal(retainedSourceDashboard.body.candidates.length, 0);
+  assert.equal(retainedSourceDashboard.body.archives.length, 1);
+
+  const restoredRetainedSource = await request(`/api/archives/${archivedWithSourceRetained.body.archive_id}/restore`, {
+    method: 'POST', origin: config.publicOrigin, cookie, csrf: login.body.csrf,
+    body: { confirmation: 'demo' }
+  });
+  assert.equal(restoredRetainedSource.status, 200);
+  assert.equal(existsSync(resolve(englishRoot, 'demo', 'index.html')), true);
+
+  const archivedForDeletion = await request('/api/projects/en/demo/archive', {
+    method: 'POST', origin: config.publicOrigin, cookie, csrf: login.body.csrf,
+    body: { confirmation: 'demo', archive_source: false }
+  });
+  assert.equal(archivedForDeletion.status, 200);
+  const rejectedPurge = await request(`/api/archives/${archivedForDeletion.body.archive_id}/purge`, {
+    method: 'POST', origin: config.publicOrigin, cookie, csrf: login.body.csrf,
+    body: { confirmation: 'demo', delete_confirmation: 'wrong' }
+  });
+  assert.equal(rejectedPurge.status, 400);
+  const purged = await request(`/api/archives/${archivedForDeletion.body.archive_id}/purge`, {
+    method: 'POST', origin: config.publicOrigin, cookie, csrf: login.body.csrf,
+    body: { confirmation: 'demo', delete_confirmation: 'DELETE' }
+  });
+  assert.equal(purged.status, 200);
+  assert.equal(existsSync(resolve(englishRoot, 'demo', 'index.html')), true);
+  assert.equal(existsSync(resolve(stateRoot, 'project-purge-records', 'en')), true);
+  const purgedDashboard = await request('/api/dashboard', { cookie });
+  assert.equal(purgedDashboard.body.projects.length, 0);
+  assert.equal(purgedDashboard.body.archives.length, 0);
 });

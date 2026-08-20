@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.2.0
+
+### Project lifecycle
+
+* Added administrator-only project archival from the browser console with typed confirmation and a clear summary of pending pages and unresolved comments.
+* Archival closes review, preserves Azure history, moves active staging and private configuration into C9 private storage, and leaves the source product untouched by default.
+* Added an explicit option for smoke tests and temporary demonstrations that moves the source folder into the same recoverable private archive.
+* Added an Archived Projects section with retention status and restoration that rebuilds staging from the current source, reactivates Azure registration, and keeps review closed until an administrator reopens it.
+* Added permanent deletion only after a 30-day archive retention period, with separate project-name and `DELETE` confirmations. Azure rejects deletion while unpublished edits or unresolved comments remain.
+* Added private purge records and server-side Azure cascade deletion so normal lifecycle operations never require direct SQLite or shell commands.
+
+### Deployment resilience
+
+* Changed the C9 admin service mask to `0027` so Apache can read staged previews through the `apache` group while private JSON remains explicitly `0600`.
+* Added bounded admin health retries to prevent a successful service start from being rolled back by an immediate health-check race.
+* Added verified temporary HTML writes so an empty or incomplete generated page cannot replace a valid staging preview.
+
 ## 4.1.0
 
 ### Browser administration

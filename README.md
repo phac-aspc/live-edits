@@ -1,6 +1,6 @@
 # Health Infobase Live Edits
 
-Live Edits is a bilingual, collaborative review tool for controlled HTML content changes in staged Health Infobase products. Version 4.1 adds a browser-based administration console so normal project setup and publishing no longer require Cloud9 commands.
+Live Edits is a bilingual, collaborative review tool for controlled HTML content changes in staged Health Infobase products. Version 4.2 adds complete project archival and restoration to the browser-based administration console so normal project lifecycle work no longer requires Cloud9 or Azure commands.
 
 | Component | Location | Purpose |
 | --- | --- | --- |
@@ -46,4 +46,4 @@ node --test server/test/*.test.js
 npm run check
 ```
 
-The current release is `4.1.0`. Deployment and upgrade order are documented in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+The current release is `4.2.0`. Deployment and upgrade order are documented in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).

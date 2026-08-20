@@ -12,7 +12,7 @@ EnvironmentFile=/etc/live-edits/admin.env
 ExecStart=__NODE_PATH__ admin/server.js
 Restart=on-failure
 RestartSec=5
-UMask=0077
+UMask=0027
 NoNewPrivileges=true
 PrivateTmp=true
 

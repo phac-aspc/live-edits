@@ -14,6 +14,8 @@ import {
   validateSiteKey
 } from './security.js';
 
+const PROJECT_DELETE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
 function pageRoom(projectId, pagePath) {
   return `page:${projectId}:${pagePath}`;
 }
@@ -86,6 +88,7 @@ export function createRoutes(db, config, editorAuth, adminAuth) {
   router.get('/projects', adminAuth, (request, response) => {
     const projects = db.prepare(`
       SELECT p.*,
+        CASE WHEN p.status = 'archived' THEN p.updated_at + ${PROJECT_DELETE_RETENTION_MS} ELSE NULL END AS purge_available_at,
         (SELECT COUNT(*) FROM project_pages page WHERE page.project_id = p.id) AS page_count,
         (SELECT COUNT(*) FROM comments c WHERE c.project_id = p.id AND c.resolved = 0) AS unresolved_comments,
         (SELECT COUNT(*) FROM edits e
@@ -142,6 +145,53 @@ export function createRoutes(db, config, editorAuth, adminAuth) {
     db.prepare('UPDATE projects SET review_status = ?, status = ?, updated_at = ? WHERE id = ?')
       .run(reviewStatus, status, updatedAt, project.id);
     response.json({ ...project, review_status: reviewStatus, status, updated_at: updatedAt });
+  });
+
+  router.delete('/projects/:projectId', adminAuth, (request, response) => {
+    const project = adminProjectOr404(db, request.params.projectId);
+    if (project.status !== 'archived' || project.review_status !== 'closed') {
+      httpError('Only archived projects with closed review can be permanently deleted.', 409);
+    }
+    if (request.body?.confirmation !== project.name || request.body?.delete_confirmation !== 'DELETE') {
+      httpError(`Enter ${project.name} and DELETE to confirm permanent deletion.`);
+    }
+    const purgeAvailableAt = project.updated_at + PROJECT_DELETE_RETENTION_MS;
+    if (Date.now() < purgeAvailableAt) {
+      const error = new Error('The 30-day archive retention period has not ended.');
+      error.status = 409;
+      error.details = { purge_available_at: purgeAvailableAt };
+      throw error;
+    }
+    const unresolvedComments = db.prepare(
+      'SELECT COUNT(*) AS count FROM comments WHERE project_id = ? AND resolved = 0'
+    ).get(project.id).count;
+    const unpublishedPages = db.prepare(`
+      SELECT COUNT(*) AS count FROM edits e
+      JOIN project_pages page ON page.project_id = e.project_id
+        AND page.page_path = e.page_path AND page.manifest_hash = e.manifest_hash
+      WHERE e.project_id = ? AND e.published_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM edits newer WHERE newer.project_id = e.project_id
+            AND newer.page_path = e.page_path AND newer.revision > e.revision
+        )
+    `).get(project.id).count;
+    if (unresolvedComments || unpublishedPages) {
+      const error = new Error('Resolve comments and publish or discard pending edits before permanent deletion.');
+      error.status = 409;
+      error.details = {
+        unresolved_comments: unresolvedComments,
+        unpublished_pages: unpublishedPages
+      };
+      throw error;
+    }
+    const counts = {
+      pages: db.prepare('SELECT COUNT(*) AS count FROM project_pages WHERE project_id = ?').get(project.id).count,
+      edits: db.prepare('SELECT COUNT(*) AS count FROM edits WHERE project_id = ?').get(project.id).count,
+      comments: db.prepare('SELECT COUNT(*) AS count FROM comments WHERE project_id = ?').get(project.id).count,
+      publishes: db.prepare('SELECT COUNT(*) AS count FROM publish_events WHERE project_id = ?').get(project.id).count
+    };
+    db.prepare('DELETE FROM projects WHERE id = ?').run(project.id);
+    response.json({ deleted: true, project, counts });
   });
 
   router.get('/projects/lookup', editorAuth, (request, response) => {

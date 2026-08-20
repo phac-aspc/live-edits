@@ -1,6 +1,6 @@
 {
   "name": "health-infobase-live-edits",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "description": "Authenticated collaborative content review and safe publishing for Health Infobase products",
   "private": true,
   "type": "module",
