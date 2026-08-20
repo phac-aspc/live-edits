@@ -1,6 +1,6 @@
 # Deployment guide
 
-Version 4.1 changes both Azure TEST and C9. Deploy Azure first, then C9, then refresh existing staged projects from the admin console. This order prevents a new name-and-email widget from reaching an API that still expects the old shared editor token.
+Version 4.1 changes both Azure TEST and C9. Use a three-phase rollout: deploy the Azure 4.1 code while temporarily retaining editor token mode, deploy C9 and refresh the shared widget, then switch Azure to network reviewer mode. This keeps the existing staged pages usable throughout the rollout.
 
 ## Deployment map
 
@@ -22,7 +22,7 @@ Use the isolated Node.js 24 runtime already installed on each host. The C9 runti
 4. Record `sudo /usr/sbin/httpd -S` and `sudo apachectl -t` output so virtual hosts can be compared afterward.
 5. Generate a new random `LIVE_EDITS_ADMIN_UI_TOKEN` of at least 32 characters. It must differ from `ADMIN_TOKEN`.
 
-## 2. Deploy Azure TEST first
+## 2. Deploy Azure TEST in compatibility mode
 
 Update the release in `E:\live-edits` while preserving `server\.env` and `server\data`. Set the access section to:
 
@@ -37,11 +37,12 @@ DB_PATH=E:/live-edits/server/data/live-edits-v4.db
 CORS_ORIGINS=https://en.infobase-dev.com,https://fr.infobase-dev.com
 TRUST_PROXY=loopback
 AUTH_MODE=token
-EDITOR_AUTH_MODE=network
+EDITOR_AUTH_MODE=token
+EDITOR_TOKEN=the-existing-editor-token
 ADMIN_TOKEN=the-existing-azure-admin-token
 ```
 
-`EDITOR_TOKEN` is not required in network mode. Keep Node bound to loopback and TCP 3000 closed externally.
+Keep the existing editor token for this compatibility phase. Keep Node bound to loopback and TCP 3000 closed externally.
 
 In elevated PowerShell, install the locked server dependencies, run the database migration, and reinstall/restart the existing task with the isolated Node runtime:
 
@@ -63,7 +64,7 @@ curl.exe -i https://test.infobase-dev.com/live-edits/healthz
 curl.exe -i https://test.infobase-dev.com/live-edits/api/v1/auth/config
 ```
 
-Health must report `4.1.0`; auth config must report `network`. An unauthenticated `/api/v1/projects` request must still return `401` because that is an administrator route.
+Health must report `4.1.0`; auth config must still report `token`. Existing staged projects must continue accepting the existing editor token. An unauthenticated `/api/v1/projects` request must return `401` because that is an administrator route.
 
 ## 3. Deploy C9 second
 
@@ -100,18 +101,32 @@ curl -kfsS --resolve 'en.infobase-dev.com:443:127.0.0.1' \
 
 The virtual-host listing must match the pre-deployment record. The new public health path must return `4.1.0` only while connected through the approved network.
 
-## 4. Refresh and test
+## 4. Install the shared 4.1 widget
 
 1. Open `https://en.infobase-dev.com/_live-edits/v4/admin/`.
 2. Sign in with the new console passphrase.
 3. Confirm existing C9 projects appear with Azure counts and links.
-4. Use **Refresh staging** on the smoke-test project so it receives the 4.1 widget.
-5. Open its preview and confirm the prompt asks for name and email, not an access code.
-6. Save an edit, add and resolve a comment, open history, and verify presence from a second browser.
-7. Close review and confirm the reviewer can no longer load project data; reopen it.
-8. Use **Publish**, inspect the required dry run, publish the smoke change, and verify the live dev page plus private backup.
-9. Repeat the preview check for one French project.
-10. Repeat the off-VPN reachability test.
+4. Use **Refresh staging** on the smoke-test project. Setup copies the 4.1 widget to the shared widget URL used by all staged projects.
+5. Open its preview and confirm the existing access code still works during this compatibility phase.
+
+## 5. Enable network reviewer mode
+
+Return to `E:\live-edits\server\.env` on Azure and change only:
+
+```dotenv
+EDITOR_AUTH_MODE=network
+```
+
+The existing `EDITOR_TOKEN` may remain temporarily for rollback, but it is ignored in network mode. Restart the scheduled task and verify `/api/v1/auth/config` now reports `network`.
+
+Complete the acceptance test:
+
+1. Reload the smoke-test preview and confirm the prompt asks for name and email, not an access code.
+2. Save an edit, add and resolve a comment, open history, and verify presence from a second browser.
+3. Close review and confirm the reviewer can no longer load project data; reopen it.
+4. Use **Publish**, inspect the required dry run, publish the smoke change, and verify the live dev page plus private backup.
+5. Repeat the preview check for one French project.
+6. Repeat the off-VPN reachability test.
 
 ## Rollback
 
