@@ -101,3 +101,81 @@ test('API enforces roles, sanitizes edits, detects conflicts, and audits publish
   assert.equal(comment.status, 201);
   assert.equal(comment.body.element_key, 'intro');
 });
+
+test('network editor mode requires self-reported identity and respects review closure', async (context) => {
+  const temporaryRoot = resolve(process.cwd(), '..', 'state', 'tests');
+  mkdirSync(temporaryRoot, { recursive: true });
+  const directory = mkdtempSync(resolve(temporaryRoot, 'live-edits-network-test-'));
+  const config = {
+    dbPath: resolve(directory, 'test.db'), authMode: 'token', editorAuthMode: 'network',
+    adminToken: ADMIN, editorToken: null, maxEditBytes: 1_000_000, historyLimit: 25
+  };
+  const db = await initDatabase(config);
+  const app = express();
+  app.use(express.json());
+  app.use('/api/v1', createRoutes(db, config, requireAuth(config, 'editor'), requireAuth(config, 'admin')));
+  app.use((error, request, response, next) => {
+    if (response.headersSent) return next(error);
+    response.status(error.status || 500).json({ error: error.message, ...(error.details || {}) });
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolvePromise) => server.once('listening', resolvePromise));
+  const base = `http://127.0.0.1:${server.address().port}/api/v1`;
+  context.after(() => {
+    server.close();
+    db.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const request = async (path, options = {}) => {
+    const response = await fetch(`${base}${path}`, {
+      method: options.method || 'GET',
+      headers: {
+        ...(options.admin ? { authorization: `Bearer ${ADMIN}` } : {}),
+        ...(options.identity ? {
+          'x-live-edits-name': options.identity.name,
+          'x-live-edits-email': options.identity.email
+        } : {}),
+        ...(options.body ? { 'content-type': 'application/json' } : {})
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  const authConfig = await request('/auth/config');
+  assert.equal(authConfig.status, 200);
+  assert.equal(authConfig.body.editor_auth_mode, 'network');
+
+  const created = await request('/projects', {
+    method: 'POST', admin: true,
+    body: { site_key: 'en', project_path: '/network-demo', name: 'network-demo', origin: 'https://en.infobase-dev.com' }
+  });
+  const projectId = created.body.id;
+  await request(`/projects/${projectId}/pages/register`, {
+    method: 'POST', admin: true,
+    body: { pages: [{ page_path: '/network-demo/index.html', element_keys: ['intro'] }] }
+  });
+
+  assert.equal((await request('/projects/lookup?site_key=en&project_path=%2Fnetwork-demo')).status, 400);
+  const identity = { name: 'Program Reviewer', email: 'Reviewer@Example.ca' };
+  assert.equal((await request('/projects/lookup?site_key=en&project_path=%2Fnetwork-demo', { identity })).status, 200);
+
+  const saved = await request(`/projects/${projectId}/edits`, {
+    method: 'POST', identity,
+    body: {
+      page_path: '/network-demo/index.html', base_revision: 0, edited_by: 'Spoofed name',
+      payload: { version: 1, elements: { intro: 'Reviewed content' } }
+    }
+  });
+  assert.equal(saved.status, 201);
+  assert.equal(saved.body.edited_by, 'Program Reviewer');
+  assert.equal(Object.hasOwn(saved.body, 'edited_email'), false);
+  assert.equal(db.prepare('SELECT edited_email FROM edits WHERE id = ?').get(saved.body.id).edited_email, 'reviewer@example.ca');
+
+  const closed = await request(`/projects/${projectId}`, {
+    method: 'PATCH', admin: true, body: { review_status: 'closed' }
+  });
+  assert.equal(closed.body.review_status, 'closed');
+  assert.equal((await request('/projects/lookup?site_key=en&project_path=%2Fnetwork-demo', { identity })).status, 404);
+});

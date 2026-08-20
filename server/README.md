@@ -1,9 +1,9 @@
 # Azure TEST API
 
-The Express 5 and Socket.IO service is designed to bind only to `127.0.0.1:3000`. IIS publishes it at `https://test.infobase-dev.com/live-edits`.
+The Express and Socket.IO service binds only to `127.0.0.1:3000`. IIS publishes it at `https://test.infobase-dev.com/live-edits`.
 
-Create `.env` from `.env.example`, install with `npm ci --omit=dev`, and initialize with `npm run init-db`. The production installer and scheduled task are under `../deployment/windows/`.
+Production keeps `AUTH_MODE=token` so administrative routes always require `ADMIN_TOKEN`. `EDITOR_AUTH_MODE=network` allows reviewer routes without a shared token but requires a self-reported name and valid email on every HTTP and realtime connection. `EDITOR_AUTH_MODE=token` remains available for rollback.
 
-API routes are mounted at `/api/v1`. The unauthenticated local health route is `/healthz`. Editor and administrator Bearer tokens have separate permissions. Production startup fails if authentication is disabled, tokens are short or equal, CORS origins are absent, or required deployment values are missing.
+Create `.env` from `.env.example`, install with `npm ci --omit=dev`, and initialize with `npm run init-db`. Production startup rejects disabled authentication, short administrator secrets, non-loopback binding, non-HTTPS public configuration, and inexact CORS origins.
 
-See [../docs/DEPLOYMENT.md](../docs/DEPLOYMENT.md).
+See [../docs/DEPLOYMENT.md](../docs/DEPLOYMENT.md) and [../docs/SECURITY.md](../docs/SECURITY.md).

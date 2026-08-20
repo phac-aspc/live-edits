@@ -38,4 +38,5 @@ if command -v httpd >/dev/null 2>&1 || command -v apachectl >/dev/null 2>&1 || c
 else
   echo 'Apache was not detected on PATH. Install or start Apache before exposing previews.' >&2
 fi
-echo 'Set LIVE_EDITS_ADMIN_TOKEN in your shell, then run setup-product.js for each project.'
+echo 'Install the optional C9 admin console to manage projects in the browser.'
+echo 'Break-glass setup and publish scripts remain available for recovery.'

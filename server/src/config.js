@@ -33,6 +33,13 @@ export function loadConfig() {
   if (environment === 'production' && authMode === 'disabled') {
     throw new Error('AUTH_MODE=disabled is not permitted in production.');
   }
+  const editorAuthMode = process.env.EDITOR_AUTH_MODE || authMode;
+  if (!['token', 'network', 'disabled'].includes(editorAuthMode)) {
+    throw new Error('EDITOR_AUTH_MODE must be token, network, or disabled.');
+  }
+  if (environment === 'production' && editorAuthMode === 'disabled') {
+    throw new Error('EDITOR_AUTH_MODE=disabled is not permitted in production.');
+  }
 
   const corsOrigins = (process.env.CORS_ORIGINS || '')
     .split(',')
@@ -46,12 +53,15 @@ export function loadConfig() {
     }
   }
 
-  const editorToken = authMode === 'token' ? required('EDITOR_TOKEN', process.env.EDITOR_TOKEN) : null;
+  const editorToken = editorAuthMode === 'token' ? required('EDITOR_TOKEN', process.env.EDITOR_TOKEN) : null;
   const adminToken = authMode === 'token' ? required('ADMIN_TOKEN', process.env.ADMIN_TOKEN) : null;
-  if (authMode === 'token' && (editorToken.length < 32 || adminToken.length < 32)) {
-    throw new Error('EDITOR_TOKEN and ADMIN_TOKEN must each contain at least 32 characters.');
+  if (editorAuthMode === 'token' && editorToken.length < 32) {
+    throw new Error('EDITOR_TOKEN must contain at least 32 characters.');
   }
-  if (authMode === 'token' && editorToken === adminToken) {
+  if (authMode === 'token' && adminToken.length < 32) {
+    throw new Error('ADMIN_TOKEN must contain at least 32 characters.');
+  }
+  if (authMode === 'token' && editorAuthMode === 'token' && editorToken === adminToken) {
     throw new Error('EDITOR_TOKEN and ADMIN_TOKEN must be different.');
   }
 
@@ -77,6 +87,7 @@ export function loadConfig() {
     corsOrigins,
     trustProxy: process.env.TRUST_PROXY || 'loopback',
     authMode,
+    editorAuthMode,
     editorToken,
     adminToken,
     maxEditBytes: integer('MAX_EDIT_BYTES', process.env.MAX_EDIT_BYTES, 10_485_760, 1024, 25_000_000),

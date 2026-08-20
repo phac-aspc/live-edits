@@ -1,13 +1,12 @@
 # Project overview
 
-Live Edits 4 has three runtime components.
+Live Edits 4.1 has four runtime components.
 
-1. `scripts/setup-product.js` runs on the EC2 Cloud9 host. It creates locale specific staged previews and private project configuration.
-2. `widget/editor.js` runs only in staged pages. It loads and saves versioned element fragments through the Azure TEST API.
-3. `server/` runs on the Azure Windows TEST VM behind the IIS application at `/live-edits`. It stores projects, revisions, comments, and publish audit events in SQLite and provides Socket.IO presence.
+1. `admin/server.js` runs on C9 behind a narrow Apache proxy. It discovers products and provides the admin landing page.
+2. `scripts/setup-product.js` and `scripts/publish-product.js` run as validated child operations of the admin service. They own staging, source writes, private state, and backups.
+3. `widget/editor.js` runs only in staged pages. It handles reviewer editing, comments, history, and presence.
+4. `server/` runs on Azure TEST behind IIS. It stores projects, review state, revisions, comments, and publish audit events in SQLite.
 
-`scripts/publish-product.js` runs on Cloud9 as an administrator operation. It does not copy a staged tree over a source tree. It applies sanitized fragments to their stable source elements, after source hash and HTML structure checks.
+Project identity is `(site_key, project_path)`, preventing English and French paths from colliding. Page identity is `site_key:page_path`. Azure never receives C9 filesystem credentials, and the browser never receives the Azure administrator token.
 
-Project identity is `(site_key, project_path)`. This prevents English and French projects with the same URL path from colliding. Page identity is `site_key:page_path`.
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed data flow and [docs/OPERATIONS.md](docs/OPERATIONS.md) for commands.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for data boundaries and [docs/OPERATIONS.md](docs/OPERATIONS.md) for the browser workflow.

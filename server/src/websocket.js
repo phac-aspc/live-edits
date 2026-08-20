@@ -1,5 +1,5 @@
 import { Server } from 'socket.io';
-import { authorizeToken, validateId, validateName, validatePath } from './security.js';
+import { authorizeToken, validateEmail, validateId, validateName, validatePath } from './security.js';
 
 function roomName(projectId, pagePath) {
   return `page:${projectId}:${pagePath}`;
@@ -30,6 +30,16 @@ export function setupWebsocket(httpServer, db, config) {
     if (!authorizeToken(config, socket.handshake.auth?.token, 'editor')) {
       return next(new Error('Authentication required.'));
     }
+    if (config.editorAuthMode === 'network') {
+      try {
+        socket.data.identity = {
+          name: validateName(socket.handshake.auth?.name, 'name', 100),
+          email: validateEmail(socket.handshake.auth?.email)
+        };
+      } catch (error) {
+        return next(error);
+      }
+    }
     return next();
   });
 
@@ -38,9 +48,11 @@ export function setupWebsocket(httpServer, db, config) {
       try {
         const projectId = validateId(input?.project_id, 'project id');
         const pagePath = validatePath(input?.page_path, 'page_path');
-        const name = validateName(input?.name, 'name', 100);
-        const project = db.prepare('SELECT project_path FROM projects WHERE id = ? AND status = ?')
-          .get(projectId, 'active');
+        const name = socket.data.identity?.name || validateName(input?.name, 'name', 100);
+        const project = db.prepare(`
+          SELECT project_path FROM projects
+          WHERE id = ? AND status = 'active' AND review_status = 'open'
+        `).get(projectId);
         if (!project || (project.project_path !== '/'
           && pagePath !== project.project_path
           && !pagePath.startsWith(`${project.project_path}/`))) {

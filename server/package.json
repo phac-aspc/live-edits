@@ -1,6 +1,6 @@
 {
   "name": "health-infobase-live-edits-server",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Backend API for Health Infobase Live Edits",
   "private": true,
   "main": "src/index.js",

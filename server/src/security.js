@@ -80,6 +80,15 @@ export function validateName(value, label, max = 100) {
   return clean;
 }
 
+export function validateEmail(value, label = 'email') {
+  if (typeof value !== 'string') fail(`${label} is required.`);
+  const clean = value.trim().toLowerCase();
+  if (clean.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) {
+    fail(`${label} must be a valid email address.`);
+  }
+  return clean;
+}
+
 export function validateOrigin(value) {
   try {
     const url = new URL(value);
@@ -122,6 +131,7 @@ function tokenMatches(received, expected) {
 }
 
 export function authorizeToken(config, received, role = 'editor') {
+  if (role === 'editor' && ['network', 'disabled'].includes(config.editorAuthMode || config.authMode)) return true;
   if (config.authMode === 'disabled') return true;
   if (tokenMatches(received, config.adminToken)) return true;
   return role === 'editor' && tokenMatches(received, config.editorToken);
@@ -134,6 +144,16 @@ export function requireAuth(config, role = 'editor') {
     if (!authorizeToken(config, token, role)) {
       response.set('WWW-Authenticate', 'Bearer');
       return response.status(401).json({ error: 'Authentication required.' });
+    }
+    if (role === 'editor' && config.editorAuthMode === 'network') {
+      try {
+        request.editorIdentity = {
+          name: validateName(request.get('x-live-edits-name'), 'name', 100),
+          email: validateEmail(request.get('x-live-edits-email'))
+        };
+      } catch (error) {
+        return response.status(error.status || 400).json({ error: error.message });
+      }
     }
     return next();
   };

@@ -36,7 +36,10 @@ async function main() {
       return callback(error);
     },
     methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['authorization', 'content-type', 'x-request-id'],
+    allowedHeaders: [
+      'authorization', 'content-type', 'x-request-id',
+      'x-live-edits-name', 'x-live-edits-email'
+    ],
     maxAge: 3600
   }));
   app.use(express.json({ limit: config.maxEditBytes + 16_384, strict: true }));
@@ -52,7 +55,7 @@ async function main() {
 
   app.get('/healthz', (request, response) => {
     db.prepare('SELECT 1').get();
-    response.set('cache-control', 'no-store').json({ status: 'ok', version: '4.0.0' });
+    response.set('cache-control', 'no-store').json({ status: 'ok', version: '4.1.0' });
   });
 
   const editorAuth = requireAuth(config, 'editor');
@@ -81,7 +84,7 @@ async function main() {
     httpServer.once('error', reject);
     httpServer.listen(config.port, config.host, resolve);
   });
-  console.log(`Live Edits 4.0.0 listening on http://${config.host}:${config.port}`);
+  console.log(`Live Edits 4.1.0 listening on http://${config.host}:${config.port}`);
 
   const shutdown = (signal) => {
     console.log(`${signal} received; shutting down.`);

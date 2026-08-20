@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Edits administration</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <header class="site-header">
+    <div>
+      <p class="eyebrow">Health Infobase</p>
+      <h1>Live Edits administration</h1>
+    </div>
+    <div class="header-actions">
+      <span id="signed-in-user"></span>
+      <button id="refresh-dashboard" type="button">Refresh</button>
+      <button id="sign-out" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <main id="main" class="layout" hidden>
+    <section class="summary" aria-labelledby="summary-title">
+      <h2 id="summary-title" class="visually-hidden">Summary</h2>
+      <article><strong id="project-count">0</strong><span>Live Edits projects</span></article>
+      <article><strong id="pending-count">0</strong><span>Pages awaiting publication</span></article>
+      <article><strong id="comment-count">0</strong><span>Unresolved comments</span></article>
+      <article><strong id="candidate-count">0</strong><span>Products available to add</span></article>
+    </section>
+
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+    <section class="panel" aria-labelledby="projects-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Review workspaces</p><h2 id="projects-title">Current projects</h2></div>
+        <label>Filter projects<input id="project-filter" type="search" placeholder="Name, locale, or path"></label>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Project</th><th>Review</th><th>Work</th><th>Source</th><th>Actions</th></tr></thead>
+          <tbody id="projects-body"></tbody>
+        </table>
+      </div>
+      <p id="no-projects" class="empty" hidden>No Live Edits projects are configured on C9.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="candidates-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Product discovery</p><h2 id="candidates-title">Add a project</h2></div>
+        <label>Filter products<input id="candidate-filter" type="search" placeholder="Name or locale"></label>
+      </div>
+      <p class="section-copy">These product folders contain HTML and are not currently configured for Live Edits.</p>
+      <div id="candidate-list" class="candidate-grid"></div>
+      <p id="no-candidates" class="empty" hidden>No additional product folders were found.</p>
+    </section>
+  </main>
+
+  <dialog id="login-dialog">
+    <form id="login-form" method="dialog" class="dialog-form">
+      <p class="eyebrow">Administrator access</p>
+      <h2>Sign in to Live Edits</h2>
+      <p>Use the separate admin-console passphrase. The Azure administrator token is never sent to this browser.</p>
+      <label>Your name<input id="admin-name" maxlength="100" autocomplete="name" required></label>
+      <label>Admin passphrase<input id="admin-passphrase" type="password" autocomplete="current-password" required></label>
+      <div id="login-error" class="error" role="alert" hidden></div>
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+  </dialog>
+
+  <dialog id="operation-dialog">
+    <form method="dialog" class="dialog-form wide">
+      <div class="dialog-heading"><h2 id="operation-title">Project operation</h2><button value="close" aria-label="Close">×</button></div>
+      <div id="operation-content"></div>
+      <div id="operation-error" class="error" role="alert" hidden></div>
+      <div id="operation-actions" class="dialog-actions"></div>
+    </form>
+  </dialog>
+</body>
+</html>

@@ -1,54 +1,47 @@
 # Architecture
 
-## Boundaries
+## Runtime boundaries
 
-The Cloud9 checkout is an administrator tool and stays outside the web roots. The locale web roots contain existing source products. Disposable staged previews and the public widget copy live under `/home/ec2-user/environment/wwwroot/_live-edits/v4`, which both hostnames already expose through the shared Apache `/_live-edits` alias. The Azure TEST VM stores collaborative state and never receives filesystem credentials for Cloud9. Publishing is a pull operation initiated on Cloud9.
+The admin console runs on C9 because only C9 can safely discover product folders, create staged previews, compare source hashes, write source files, and create backups. Azure stores collaborative state and never receives C9 filesystem credentials. The browser never receives the Azure administrator token.
 
 ```mermaid
 flowchart TB
-  R[Reviewer browser] -->|HTTPS and editor token| A[Azure TEST API]
-  R -->|HTTPS preview| P[English or French preview root]
-  C[Cloud9 setup and publisher] -->|Admin token| A
-  C -->|Stage and validated publish| S[Locale source folder]
-  A --> D[(SQLite v4)]
+  R["Program reviewer"] -->|"VPN HTTPS; name + email"| P["C9 staged preview"]
+  R -->|"VPN HTTPS; edit API + realtime"| A["Azure TEST API"]
+  H["Health Infobase admin"] -->|"VPN HTTPS; admin session"| C["C9 admin console"]
+  C -->|"Validated setup / publish"| S["C9 source + private backups"]
+  C -->|"Server-held ADMIN_TOKEN"| A
+  A --> D[("SQLite")]
 ```
 
-## Identity
+Apache continues to serve the existing English and French document roots and shared `/_live-edits` alias. A separate configuration adds only `/_live-edits/v4/admin/` as a reverse proxy to `127.0.0.1:3100`. The Azure Node service remains on `127.0.0.1:3000` behind the existing IIS application.
 
-Projects are unique by `site_key` plus `project_path`. `site_key` is `en` or `fr`; a French `/product` cannot resolve to the English project with the same path.
+## Project discovery and setup
 
-Pages use their source URL path, not their locale namespaced `/_live-edits/v4/products/SITE/` staging URL. An element key is either an explicitly supplied valid key or `le_` plus the first 20 hexadecimal characters of a SHA256 digest over the locale page identity and deterministic DOM element path.
+The C9 service scans top-level folders in both locale web roots, skips known private or generated folders, and lists only folders containing HTML. It compares each locale and URL path with private C9 project state. Adding a project invokes setup with validated argument arrays rather than a shell command string.
 
-Setup registers the exact key manifest for every page. Saved edit rows contain that manifest hash. The API accepts a save only when the payload contains exactly the registered keys. Publishing joins edits to the current page manifest, so a source structure refresh cannot accidentally publish an older incompatible revision.
+Setup copies public files into a hidden build directory, excludes private and executable content, rejects symlinks, annotates safe edit regions, injects explicit deployment data, installs the shared widget, atomically replaces the preview, registers the project and page manifests in Azure, and writes private C9 state.
+
+## Reviewer identity and permissions
+
+In network mode, the widget sends the self-reported name and email on each API request and realtime handshake. Middleware validates both before route handling. The database stores email beside the edit or comment, while public response serializers deliberately remove it.
+
+Reviewer access requires an active project with open review. Administrative routes use a separate Bearer token and can inspect projects regardless of review state. Closing review therefore blocks new reviewer reads and writes without deleting data or preventing an authorized publication.
 
 ## Saved data
 
-An edit is a full versioned snapshot of keyed inner HTML fragments:
-
-```json
-{
-  "version": 1,
-  "elements": {
-    "le_0123456789abcdefabcd": "Reviewed <strong>content</strong>."
-  }
-}
-```
-
-The snapshot does not contain a document body, head, script bootstrap, coordinates for edited content, or a filesystem path. The API sanitizes fragments and stores a SHA256 content hash. Revisions increase per project page and require an exact `base_revision`.
-
-Comments are separate records anchored by `element_key` and normalized x and y offsets between zero and one. Presence exists only in Socket.IO memory and is not persisted.
+An edit is a versioned snapshot of registered keyed fragments. Optimistic `base_revision` checks prevent silent overwrite. Comments are separate element-key records. Presence exists only in Socket.IO memory. Project summaries calculate compatible unpublished pages, unresolved comments, activity dates, registered pages, and last publication.
 
 ## Publishing algorithm
 
-1. Request the latest unpublished, manifest compatible edit for every project page.
-2. Resolve the page URL to a contained source file and compare it with the setup hash.
-3. Parse the original source with source locations and deterministically annotate missing keys.
-4. Locate every edited key and sanitize each fragment again.
-5. Apply inner HTML replacements from the highest source offset to the lowest.
-6. Reparse the result and confirm every fragment remained inside its original keyed element.
-7. Validate the complete plan before any write.
-8. Copy changed originals to a private timestamped backup.
-9. Write temporary sibling files and rename them into place. Restore completed files if a later write fails.
-10. Mark exact revisions published and store a publish audit event under an idempotent operation ID. A lost response can be reconciled without a second file write or duplicate audit event.
+1. Retrieve the latest unpublished, manifest-compatible edit for each project page.
+2. Resolve each page to a contained source file and compare the setup hash.
+3. Parse the original source and deterministically annotate missing stable keys.
+4. Sanitize and apply each edited fragment to its exact keyed element.
+5. Reparse the result and confirm fragments remained inside their original containers.
+6. Validate every page before any write.
+7. Copy changed originals to a private timestamped backup.
+8. Write temporary sibling files and rename them into place; restore completed files after a partial failure.
+9. Mark exact revisions published and store an idempotent publish audit event.
 
-This model preserves the doctype, head, body attributes, scripts, dynamic elements, formatting outside changed blocks, and unrelated assets.
+The admin UI always executes this algorithm first as a dry run and only enables the confirmed apply operation after the administrator reviews its output.

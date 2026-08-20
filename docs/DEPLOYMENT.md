@@ -1,54 +1,30 @@
 # Deployment guide
 
-This guide assumes the corrected Azure TEST hostname is `test.infobase-dev.com`. The English and French preview hostnames belong to the EC2 Cloud9 host only.
+Version 4.1 changes both Azure TEST and C9. Deploy Azure first, then C9, then refresh existing staged projects from the admin console. This order prevents a new name-and-email widget from reaching an API that still expects the old shared editor token.
 
 ## Deployment map
 
-| Component | Host | Public address | Local location |
-| --- | --- | --- | --- |
-| API and realtime service | Azure Windows TEST VM | `https://test.infobase-dev.com/live-edits` | `E:\live-edits\server`, listening on `127.0.0.1:3000` |
-| English previews and source | EC2 Cloud9 | `https://en.infobase-dev.com` | `/home/ec2-user/environment/wwwroot/en` |
-| French previews and source | EC2 Cloud9 | `https://fr.infobase-dev.com` | `/home/ec2-user/environment/wwwroot/fr` |
-| Shared version 4 staging | EC2 Cloud9 | `https://HOST/_live-edits/v4/` | `/home/ec2-user/environment/wwwroot/_live-edits/v4` |
-| Cloud9 tool checkout | EC2 Cloud9 | Never web served | `/home/ec2-user/environment/tools/live-edits` |
+| Component | Host | Address or binding |
+| --- | --- | --- |
+| API and realtime | Azure Windows TEST VM | `https://test.infobase-dev.com/live-edits` → `127.0.0.1:3000` |
+| English previews/source | C9 | `https://en.infobase-dev.com` → `wwwroot/en` |
+| French previews/source | C9 | `https://fr.infobase-dev.com` → `wwwroot/fr` |
+| Admin console | C9 | `https://en.infobase-dev.com/_live-edits/v4/admin/` → `127.0.0.1:3100` |
+| Tool, state, backups | C9 | `/home/ec2-user/environment/tools/live-edits`; never web served |
 
-Use Node.js 24 LTS on both hosts. The checked in engine range starts at Node.js 24.18.1, and `.nvmrc` pins the tested release. Using the same version on TEST and Cloud9 makes runtime behavior predictable.
+Use the isolated Node.js 24 runtime already installed on each host. The C9 runtime does not require a `.git` folder or GitHub remote.
 
-## Generate credentials
+## 1. Pre-deployment gates
 
-Generate two different high entropy values. Run this command twice and save each result in your approved secret manager:
+1. From a device outside the VPN, confirm that all three development hostnames are unreachable.
+2. Back up the Azure SQLite database using an approved method while accounting for its WAL.
+3. Back up the C9 `state/` directory.
+4. Record `sudo /usr/sbin/httpd -S` and `sudo apachectl -t` output so virtual hosts can be compared afterward.
+5. Generate a new random `LIVE_EDITS_ADMIN_UI_TOKEN` of at least 32 characters. It must differ from `ADMIN_TOKEN`.
 
-```powershell
-node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
-```
+## 2. Deploy Azure TEST first
 
-The first is `EDITOR_TOKEN`. Reviewers may enter it in the browser. The second is `ADMIN_TOKEN`. Only the Azure service and authorized Cloud9 operators may have the administrator value.
-
-## Azure Windows TEST VM
-
-### 1. Prepare DNS, TLS, IIS, and Node.js
-
-1. Point `test.infobase-dev.com` to the TEST VM endpoint used by IIS.
-2. Install a valid TLS certificate and add an HTTPS binding for `test.infobase-dev.com` to the chosen IIS site.
-3. Enable the IIS WebSocket Protocol Windows feature.
-4. Install IIS URL Rewrite and Application Request Routing, including the proxy module.
-5. Install 64 bit Node.js 24 LTS and Git. If another application requires an older machine wide Node.js version, extract the official Node.js 24 ZIP to a dedicated runtime directory instead. Confirm the selected Node.js 24 executable, its adjacent `npm.cmd`, and Git in an elevated PowerShell session.
-6. Permit inbound TCP 443 through the Azure network security group and Windows Firewall. Do not expose TCP 3000; Node binds to loopback only.
-
-### 2. Install the repository
-
-In elevated PowerShell:
-
-```powershell
-New-Item -ItemType Directory -Path E:\live-edits -Force | Out-Null
-git clone https://github.com/phac-aspc/live-edits.git E:\live-edits
-Set-Location E:\live-edits
-git switch master
-Copy-Item server\.env.example server\.env
-notepad server\.env
-```
-
-Set these production values:
+Update the release in `E:\live-edits` while preserving `server\.env` and `server\data`. Set the access section to:
 
 ```dotenv
 NODE_ENV=production
@@ -61,177 +37,84 @@ DB_PATH=E:/live-edits/server/data/live-edits-v4.db
 CORS_ORIGINS=https://en.infobase-dev.com,https://fr.infobase-dev.com
 TRUST_PROXY=loopback
 AUTH_MODE=token
-EDITOR_TOKEN=the-first-generated-secret
-ADMIN_TOKEN=the-second-generated-secret
-MAX_EDIT_BYTES=10485760
-HISTORY_LIMIT=25
+EDITOR_AUTH_MODE=network
+ADMIN_TOKEN=the-existing-azure-admin-token
 ```
 
-Restrict access to `.env`, the database, backups, and logs to VM administrators and the account running the service. Do not put a copy of `.env` in Cloud9 or any web root.
+`EDITOR_TOKEN` is not required in network mode. Keep Node bound to loopback and TCP 3000 closed externally.
 
-### 3. Install IIS application and scheduled task
-
-Run this when Node.js 24 is the machine wide version:
+In elevated PowerShell, install the locked server dependencies, run the database migration, and reinstall/restart the existing task with the isolated Node runtime:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\deployment\windows\install-live-edits.ps1 -IisSiteName 'Default Web Site'
-```
-
-If the VM retains an older machine wide Node.js version for another application, select the isolated runtime explicitly:
-
-```powershell
+Set-Location E:\live-edits
+& 'E:\runtimes\node-v24.18.1-win-x64\npm.cmd' --prefix server ci --omit=dev
+& 'E:\runtimes\node-v24.18.1-win-x64\node.exe' server\src\init-db.js
 Set-ExecutionPolicy -Scope Process Bypass
 .\deployment\windows\install-live-edits.ps1 `
   -IisSiteName 'Default Web Site' `
   -NodePath 'E:\runtimes\node-v24.18.1-win-x64\node.exe'
 ```
 
-The installer uses `npm.cmd` beside the selected executable and records the absolute Node.js path in the Live Edits scheduled task. Other applications continue using the machine wide runtime.
-
-The script performs a clean production dependency install, initializes or migrates the database, confirms the IIS WebSocket module, creates the `/live-edits` IIS application, enables ARR proxying, registers a startup task under `SYSTEM`, starts it, and waits up to 30 seconds for `http://127.0.0.1:3000/healthz`. WebSocket support is enabled as a Windows feature and inherited by the application; `server/web.config` does not override the server level WebSocket section because hardened IIS installations commonly lock it at the parent level.
-
-If the TEST VM uses another IIS site, pass its exact name. If IIS is managed separately, pass `-SkipIis` and configure an application rooted at `E:\live-edits\server` using the checked in `server\web.config`.
-
-### 4. Verify Azure
+Verify locally and through IIS:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:3000/healthz
-Invoke-RestMethod https://test.infobase-dev.com/live-edits/healthz
-Get-ScheduledTask -TaskName 'Health Infobase Live Edits'
-Get-Content E:\live-edits\server\logs\live-edits.log -Tail 50
-Get-Content E:\live-edits\server\logs\live-edits-error.log -Tail 50
+curl.exe -i http://127.0.0.1:3000/healthz
+curl.exe -i https://test.infobase-dev.com/live-edits/healthz
+curl.exe -i https://test.infobase-dev.com/live-edits/api/v1/auth/config
 ```
 
-The startup task launches the selected Node.js executable through `Start-Process -Wait`. Standard output and standard error are captured separately, and an unexpected Node.js exit code is appended to `live-edits-error.log` for service lifetime diagnostics.
+Health must report `4.1.0`; auth config must report `network`. An unauthenticated `/api/v1/projects` request must still return `401` because that is an administrator route.
 
-An unauthenticated request to `/live-edits/api/v1/projects` must return `401`. A browser preflight from an origin other than the two configured preview origins must fail.
+## 3. Deploy C9 second
 
-### 5. Version 3 database handling
+Place the 4.1 release in `/home/ec2-user/environment/tools/live-edits` while preserving `state/`. This can be done from an approved release archive; Git connectivity and `.git` metadata are not required. Install the locked root dependencies with the isolated Node 24 `npm`.
 
-Use `live-edits-v4.db` for the cleanest upgrade. If `DB_PATH` points to a version 3 database, startup first creates a timestamped SQLite backup, then renames the old tables to `legacy_*_v3` and creates the version 4 schema. Legacy edit snapshots are retained for manual reference but are not publishable because their payload model is incompatible.
+Create `/etc/live-edits/admin.env` from `deployment/aws/live-edits-admin.env.example`. Put the existing Azure `ADMIN_TOKEN` and the new, different console passphrase in this root-owned `0600` file. Do not put either value in the repository, C9 project settings, Apache configuration, or web root.
 
-Keep the old database backup until version 4 is accepted. Never copy a live SQLite file without also accounting for its WAL; stop the scheduled task or use SQLite's backup mechanism.
+Run the one-time installer with the existing C9 Node 24 executable:
 
-## EC2 Cloud9 host
+```bash
+sudo ./deployment/aws/install-admin-console.sh \
+  /home/ec2-user/environment/tools/runtimes/node-v24.18.1-linux-x64/bin/node
+```
 
-### 1. Inspect Apache without changing it
+The installer:
 
-The web server and DNS must already map:
+* creates a systemd service running as `ec2-user` and group `apache`;
+* binds the admin service only to `127.0.0.1:3100`;
+* installs a separate `/etc/httpd/conf.d/live-edits-admin.conf`;
+* adds only the `/_live-edits/v4/admin/` proxy path;
+* validates the complete Apache configuration before reload;
+* does not edit `vhosts.conf`, virtual hosts, document roots, TLS, locale aliases, or existing rewrites.
 
-* `en.infobase-dev.com` to `/home/ec2-user/environment/wwwroot/en`
-* `fr.infobase-dev.com` to `/home/ec2-user/environment/wwwroot/fr`
-
-Verify that the hostnames return the correct locale before staging an edit project. Confirm that the web server permits static JavaScript under `/_live-edits/v4/widget/` and WebSocket connections to the Azure TEST hostname.
-
-The existing HTTPS virtual hosts already map `/_live-edits` on both hostnames to `/home/ec2-user/environment/wwwroot/_live-edits`. Version 4 uses that mapping without changing `vhosts.conf`. Its English and French previews are separated below `products/en/` and `products/fr/`.
-
-Apache is already serving the Cloud9 sites. Do not replace the existing virtual hosts, document roots, TLS configuration, aliases, proxy rules, or rewrite rules. Begin with read only checks:
+Verify the old mappings and new service:
 
 ```bash
 sudo apachectl -t
-sudo apachectl -S
-sudo systemctl status httpd --no-pager
+sudo /usr/sbin/httpd -S
+sudo systemctl status live-edits-admin --no-pager
+curl -fsS http://127.0.0.1:3100/healthz
+curl -kfsS --resolve 'en.infobase-dev.com:443:127.0.0.1' \
+  https://en.infobase-dev.com/_live-edits/v4/admin/healthz
 ```
 
-On Debian or Ubuntu, use `apache2ctl` and the `apache2` service name. Save the `apachectl -S` output with the deployment record so the existing mappings can be compared after the pilot.
+The virtual-host listing must match the pre-deployment record. The new public health path must return `4.1.0` only while connected through the approved network.
 
-### 2. Install the tool outside both web roots
+## 4. Refresh and test
 
-```bash
-mkdir -p /home/ec2-user/environment/tools
-git clone https://github.com/phac-aspc/live-edits.git /home/ec2-user/environment/tools/live-edits
-cd /home/ec2-user/environment/tools/live-edits
-nvm install
-nvm use
-./deployment/aws/bootstrap-cloud9.sh
-```
+1. Open `https://en.infobase-dev.com/_live-edits/v4/admin/`.
+2. Sign in with the new console passphrase.
+3. Confirm existing C9 projects appear with Azure counts and links.
+4. Use **Refresh staging** on the smoke-test project so it receives the 4.1 widget.
+5. Open its preview and confirm the prompt asks for name and email, not an access code.
+6. Save an edit, add and resolve a comment, open history, and verify presence from a second browser.
+7. Close review and confirm the reviewer can no longer load project data; reopen it.
+8. Use **Publish**, inspect the required dry run, publish the smoke change, and verify the live dev page plus private backup.
+9. Repeat the preview check for one French project.
+10. Repeat the off-VPN reachability test.
 
-The bootstrap verifies both document roots, installs the locked root dependencies, and runs syntax checks. The Cloud9 host does not need the server dependencies or SQLite native module.
+## Rollback
 
-The bootstrap does not edit or reload Apache. It only verifies Node.js, the two expected document root directories, dependencies, and project syntax.
+To restore shared reviewer-token access, set `EDITOR_AUTH_MODE=token`, restore a 32-character-or-longer `EDITOR_TOKEN`, restart the Azure task, and refresh staged projects after returning the matching widget release. Administrative `AUTH_MODE=token` and `ADMIN_TOKEN` remain unchanged.
 
-### 3. Keep the existing Apache mappings
-
-No Apache change is required for the first pilot if the existing virtual hosts already serve static files from both document roots. Verify this before staging:
-
-```bash
-curl -I https://en.infobase-dev.com/
-curl -I https://fr.infobase-dev.com/
-```
-
-The repository includes an optional defense in depth policy at `deployment/aws/apache-live-edits.conf`. It contains no `VirtualHost`, `ServerName`, `DocumentRoot`, `Alias`, `ProxyPass`, TLS, or rewrite directives, so it is not designed to remap either site. It applies only below `/_live-edits/v4/` and does not alter older `/_live-edits/` content. It can still change version 4 access rules, so do not install it until the existing Apache configuration has been reviewed and the pilot previews work.
-
-If the policy is approved later, first back up the current Apache configuration and run a syntax check. The optional installer performs its own validation and restoration:
-
-```bash
-sudo ./deployment/aws/install-apache-config.sh
-```
-
-The installer detects Amazon Linux or RHEL versus Debian or Ubuntu, validates the complete Apache configuration before reload, and restores the previous file if validation or reload fails. The optional policy:
-
-* permits only `/_live-edits/v4/widget/` and `/_live-edits/v4/products/` below the version 4 directory;
-* disables directory indexes and dynamic script execution in those folders;
-* blocks dotfiles, credentials, databases, executable scripts, logs, certificates, keys, backups, and temporary build directories;
-* leaves staged HTML readable so the confirmed application access code prompt remains the only reviewer sign in step.
-
-Only if the optional policy is installed, recheck Apache and both mappings:
-
-```bash
-sudo apachectl -t
-sudo apachectl -S
-curl -I https://en.infobase-dev.com/
-curl -I https://fr.infobase-dev.com/
-```
-
-### 4. Supply the administrator token only for operations
-
-Load `ADMIN_TOKEN` from your approved secret manager into the current shell without writing it to the repository or a web root:
-
-```bash
-read -rsp 'Live Edits administrator token: ' LIVE_EDITS_ADMIN_TOKEN
-echo
-export LIVE_EDITS_ADMIN_TOKEN
-```
-
-Unset it when the operation is complete:
-
-```bash
-unset LIVE_EDITS_ADMIN_TOKEN
-```
-
-### 5. Understand preview access
-
-Version 4 retains the confirmed shared application access code. The editor token protects API reads and writes, history, comments, and presence. It does not encrypt or hide the staged HTML returned by Apache. Without the optional policy, the existing Apache configuration continues to govern static preview access. If installed later, the optional policy keeps the preview HTML readable while blocking listings and unsafe file types.
-
-If a future preview contains unpublished sensitive information, use VPN or an organizational access layer. A ready Apache Basic Authentication override is also included at `deployment/aws/apache-live-edits-private.conf.example`. It adds a second browser prompt and must use a password separate from both application tokens. Do not install that optional override for the current shared access code workflow.
-
-### 6. Smoke test one project per locale
-
-Choose small projects and follow [OPERATIONS.md](OPERATIONS.md). Confirm:
-
-1. English and French preview URLs load only from their own hostnames.
-2. The access code prompt appears and a bad code fails.
-3. `/_live-edits/v4/widget/editor.js` and the staged product assets load normally.
-4. Saving, history, a comment, and presence work.
-5. A dry run lists the expected source page and no other files.
-6. A publish creates a private backup and changes only keyed HTML regions.
-
-After staging the smoke test products, verify the Apache boundary directly:
-
-```bash
-curl -I https://en.infobase-dev.com/_live-edits/v4/
-curl -I https://en.infobase-dev.com/_live-edits/v4/widget/editor.js
-curl -I https://en.infobase-dev.com/_live-edits/v4/products/en/PRODUCT/index.html
-curl -I https://fr.infobase-dev.com/_live-edits/v4/
-curl -I https://fr.infobase-dev.com/_live-edits/v4/widget/editor.js
-curl -I https://fr.infobase-dev.com/_live-edits/v4/products/fr/PRODUCT/index.html
-```
-
-The widget and real staged page paths must return `200`. Replace `PRODUCT` with the smoke test project name. If the optional Apache policy is installed later, the parent paths, dotfile paths, and hidden temporary build paths must return `403` or `404`.
-
-## Upgrade procedure
-
-On Azure, back up the database through an approved method, stop the scheduled task, update the checkout, run `npm --prefix server ci --omit=dev`, run `node server/src/init-db.js`, then start the task and check both health URLs.
-
-On Cloud9, update the checkout and run `npm ci --omit=dev`. Re-run setup with `--force` for each active project so the widget and page manifests match the deployed release. Always run the publisher without `--apply` first after an upgrade.
+To disable only the new admin page, stop and disable `live-edits-admin.service`, remove `/etc/httpd/conf.d/live-edits-admin.conf`, validate Apache, and reload it. This does not remove source products, staged previews, private state, backups, Azure data, or existing Apache mappings.

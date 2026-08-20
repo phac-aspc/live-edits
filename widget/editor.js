@@ -18,7 +18,7 @@
 
   const isFrench = config.siteKey === 'fr' || document.documentElement.lang?.toLowerCase().startsWith('fr');
   const copy = isFrench ? {
-    title: 'Édition en direct', access: 'Code d’accès', name: 'Votre nom', connect: 'Se connecter',
+    title: 'Édition en direct', access: 'Code d’accès', name: 'Votre nom', email: 'Votre courriel', connect: 'Se connecter',
     edit: 'Modifier', stop: 'Terminer', save: 'Enregistrer', history: 'Historique', comment: 'Commenter',
     connected: 'Connecté', disconnected: 'Hors ligne', saved: 'Enregistré', unsaved: 'Modifications non enregistrées',
     selectComment: 'Sélectionnez un bloc de contenu à commenter.', commentText: 'Commentaire', add: 'Ajouter',
@@ -28,9 +28,11 @@
     merged: 'Les changements distants ont été fusionnés. Vérifiez puis enregistrez de nouveau.',
     conflictBlocks: 'Conflit dans ces blocs', loadServer: 'Charger la version serveur', close: 'Fermer',
     saveError: 'Échec de l’enregistrement', loadError: 'Impossible de charger l’éditeur.',
-    leaveWarning: 'Des modifications ne sont pas enregistrées.', emptyName: 'Veuillez saisir votre nom et le code d’accès.'
+    networkNote: 'Votre nom et votre courriel sont déclarés par vous-même et servent au journal d’activité.',
+    leaveWarning: 'Des modifications ne sont pas enregistrées.',
+    emptyToken: 'Veuillez saisir votre nom et le code d’accès.', emptyNetwork: 'Veuillez saisir votre nom et une adresse courriel valide.'
   } : {
-    title: 'Live Edits', access: 'Access code', name: 'Your name', connect: 'Connect',
+    title: 'Live Edits', access: 'Access code', name: 'Your name', email: 'Your email', connect: 'Connect',
     edit: 'Edit', stop: 'Done', save: 'Save', history: 'History', comment: 'Comment',
     connected: 'Connected', disconnected: 'Offline', saved: 'Saved', unsaved: 'Unsaved changes',
     selectComment: 'Select a content block to comment on.', commentText: 'Comment', add: 'Add',
@@ -40,11 +42,14 @@
     merged: 'Remote changes were merged. Review the page and save again.',
     conflictBlocks: 'Conflicts in these blocks', loadServer: 'Load server version', close: 'Close',
     saveError: 'Save failed', loadError: 'The editor could not be loaded.',
-    leaveWarning: 'There are unsaved changes.', emptyName: 'Enter your name and access code.'
+    networkNote: 'Your self-reported name and email are recorded in the activity log.',
+    leaveWarning: 'There are unsaved changes.',
+    emptyToken: 'Enter your name and access code.', emptyNetwork: 'Enter your name and a valid email address.'
   };
 
   const tokenKey = `live-edits-token:${new URL(config.apiBase).host}`;
   const nameKey = 'live-edits-editor-name';
+  const emailKey = 'live-edits-editor-email';
   const regions = [...document.querySelectorAll('[data-live-edits-key]')];
   const regionByKey = new Map(regions.map((element) => [element.dataset.liveEditsKey, element]));
   if (!regions.length) {
@@ -55,6 +60,8 @@
   const state = {
     token: sessionStorage.getItem(tokenKey) || '',
     name: sessionStorage.getItem(nameKey) || '',
+    email: sessionStorage.getItem(emailKey) || '',
+    authMode: 'token',
     project: null,
     revision: 0,
     baseElements: {},
@@ -73,7 +80,7 @@
   shadow.innerHTML = `
     <style>
       :host{all:initial;position:fixed;inset:auto 16px 16px auto;z-index:2147483646;color:#222;font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
-      *,*::before,*::after{box-sizing:border-box}button,input,textarea{font:inherit}button{border:1px solid #aab3bd;border-radius:5px;background:#fff;color:#222;padding:7px 10px;cursor:pointer}button:hover{background:#edf4fb}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #ffbf47;outline-offset:2px}.primary{background:#1769aa;border-color:#1769aa;color:#fff}.primary:hover{background:#0e568e}button:disabled{cursor:not-allowed;opacity:.5}.bar{display:flex;align-items:center;gap:7px;max-width:calc(100vw - 32px);padding:9px;border:1px solid #8b949e;border-radius:8px;background:#f8f9fa;box-shadow:0 4px 18px #0004}.brand{font-weight:700;margin-right:3px}.status{min-width:74px;font-size:12px}.status[data-error=true]{color:#a00}.presence{font-size:12px;color:#4b5563}.panel{position:absolute;right:0;bottom:58px;width:min(390px,calc(100vw - 32px));max-height:min(560px,calc(100vh - 90px));overflow:auto;border:1px solid #8b949e;border-radius:8px;background:#fff;box-shadow:0 4px 18px #0004;padding:14px}.hidden{display:none!important}.panel h2{font-size:18px;margin:0 0 10px}.panel h3{font-size:15px;margin:14px 0 7px}.field{display:grid;gap:4px;margin:0 0 11px}.field input,.field textarea{width:100%;border:1px solid #68737d;border-radius:4px;padding:8px}.field textarea{min-height:86px;resize:vertical}.actions{display:flex;justify-content:flex-end;gap:8px}.message{padding:9px;border-left:4px solid #1769aa;background:#eaf5ff;margin:8px 0}.error{border-color:#a00;background:#fff0f0}.list{display:grid;gap:8px}.card{border:1px solid #d2d7dc;border-radius:5px;padding:9px}.meta{font-size:12px;color:#59636e}.card p{white-space:pre-wrap}.auth{inset:auto 0 0 auto}.conflicts{font-family:ui-monospace,monospace;font-size:12px;overflow-wrap:anywhere}
+      *,*::before,*::after{box-sizing:border-box}button,input,textarea{font:inherit}button{border:1px solid #aab3bd;border-radius:5px;background:#fff;color:#222;padding:7px 10px;cursor:pointer}button:hover{background:#edf4fb}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #ffbf47;outline-offset:2px}.primary{background:#1769aa;border-color:#1769aa;color:#fff}.primary:hover{background:#0e568e}button:disabled{cursor:not-allowed;opacity:.5}.bar{display:flex;align-items:center;gap:7px;max-width:calc(100vw - 32px);padding:9px;border:1px solid #8b949e;border-radius:8px;background:#f8f9fa;box-shadow:0 4px 18px #0004}.brand{font-weight:700;margin-right:3px}.status{min-width:74px;font-size:12px}.status[data-error=true]{color:#a00}.presence{font-size:12px;color:#4b5563}.panel{position:absolute;right:0;bottom:58px;width:min(390px,calc(100vw - 32px));max-height:min(560px,calc(100vh - 90px));overflow:auto;border:1px solid #8b949e;border-radius:8px;background:#fff;box-shadow:0 4px 18px #0004;padding:14px}.hidden{display:none!important}.panel h2{font-size:18px;margin:0 0 10px}.panel h3{font-size:15px;margin:14px 0 7px}.field{display:grid;gap:4px;margin:0 0 11px}.field input,.field textarea{width:100%;border:1px solid #68737d;border-radius:4px;padding:8px}.field textarea{min-height:86px;resize:vertical}.hint{font-size:12px;color:#59636e;margin:0 0 12px}.actions{display:flex;justify-content:flex-end;gap:8px}.message{padding:9px;border-left:4px solid #1769aa;background:#eaf5ff;margin:8px 0}.error{border-color:#a00;background:#fff0f0}.list{display:grid;gap:8px}.card{border:1px solid #d2d7dc;border-radius:5px;padding:9px}.meta{font-size:12px;color:#59636e}.card p{white-space:pre-wrap}.auth{inset:auto 0 0 auto}.conflicts{font-family:ui-monospace,monospace;font-size:12px;overflow-wrap:anywhere}
     </style>
     <div class="bar" role="toolbar" aria-label="${copy.title}">
       <span class="brand">${copy.title}</span>
@@ -88,7 +95,9 @@
       <h2 id="auth-title">${copy.title}</h2>
       <div id="auth-error" class="message error hidden" role="alert"></div>
       <label class="field">${copy.name}<input id="name" maxlength="100" autocomplete="name"></label>
-      <label class="field">${copy.access}<input id="token" type="password" autocomplete="current-password"></label>
+      <label id="email-field" class="field hidden">${copy.email}<input id="email" type="email" maxlength="254" autocomplete="email"></label>
+      <label id="token-field" class="field">${copy.access}<input id="token" type="password" autocomplete="current-password"></label>
+      <p id="network-note" class="hint hidden">${copy.networkNote}</p>
       <div class="actions"><button id="connect" class="primary" type="button">${copy.connect}</button></div>
     </section>
     <section id="history-panel" class="panel hidden" aria-labelledby="history-title">
@@ -111,6 +120,7 @@
 
   const ui = Object.fromEntries([...shadow.querySelectorAll('[id]')].map((element) => [element.id, element]));
   ui.name.value = state.name;
+  ui.email.value = state.email;
   ui.token.value = state.token;
 
   const pageStyle = document.createElement('style');
@@ -143,11 +153,14 @@
   }
 
   function api(path, options = {}) {
+    const identityHeaders = state.authMode === 'network'
+      ? { 'x-live-edits-name': state.name, 'x-live-edits-email': state.email }
+      : { authorization: `Bearer ${state.token}` };
     return fetch(`${config.apiBase}${path}`, {
       method: options.method || 'GET',
       headers: {
         accept: 'application/json',
-        authorization: `Bearer ${state.token}`,
+        ...identityHeaders,
         ...(options.body ? { 'content-type': 'application/json' } : {})
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
@@ -212,9 +225,11 @@
 
   async function connect() {
     state.name = ui.name.value.trim();
+    state.email = ui.email.value.trim().toLowerCase();
     state.token = ui.token.value;
-    if (!state.name || !state.token) {
-      ui['auth-error'].textContent = copy.emptyName;
+    const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(state.email);
+    if (!state.name || (state.authMode === 'network' ? !emailValid : !state.token)) {
+      ui['auth-error'].textContent = state.authMode === 'network' ? copy.emptyNetwork : copy.emptyToken;
       ui['auth-error'].classList.remove('hidden');
       return;
     }
@@ -222,7 +237,12 @@
     try {
       await loadPage();
       sessionStorage.setItem(nameKey, state.name);
-      sessionStorage.setItem(tokenKey, state.token);
+      if (state.authMode === 'network') {
+        sessionStorage.setItem(emailKey, state.email);
+        sessionStorage.removeItem(tokenKey);
+      } else {
+        sessionStorage.setItem(tokenKey, state.token);
+      }
       closePanel('auth-panel');
       setStatus(copy.connected);
     } catch (error) {
@@ -245,6 +265,7 @@
           page_path: config.pagePath,
           base_revision: state.revision,
           edited_by: state.name,
+          edited_email: state.email || undefined,
           payload: { version: 1, elements: localElements }
         }
       });
@@ -401,7 +422,10 @@
     try {
       const comment = await api(`/api/v1/projects/${state.project.id}/comments`, {
         method: 'POST',
-        body: { page_path: config.pagePath, author: state.name, comment_text: text, ...pendingComment }
+        body: {
+          page_path: config.pagePath, author: state.name, author_email: state.email || undefined,
+          comment_text: text, ...pendingComment
+        }
       });
       if (!state.comments.some((item) => item.id === comment.id)) state.comments.push(comment);
       ui['comment-text'].value = '';
@@ -431,7 +455,7 @@
       state.socket?.disconnect();
       state.socket = window.io(apiUrl.origin, {
         path: `${apiUrl.pathname.replace(/\/$/, '')}/socket.io`,
-        auth: { token: state.token },
+        auth: { token: state.token, name: state.name, email: state.email },
         transports: ['websocket', 'polling']
       });
       state.socket.on('connect', () => {
@@ -461,6 +485,7 @@
 
   ui.connect.addEventListener('click', connect);
   ui.token.addEventListener('keydown', (event) => { if (event.key === 'Enter') connect(); });
+  ui.email.addEventListener('keydown', (event) => { if (event.key === 'Enter') connect(); });
   ui.edit.addEventListener('click', () => toggleEditing());
   ui.save.addEventListener('click', save);
   ui.history.addEventListener('click', () => showPanel('history-panel'));
@@ -513,6 +538,24 @@
     event.returnValue = copy.leaveWarning;
   });
 
-  if (state.token && state.name) connect();
-  else showPanel('auth-panel');
+  async function initializeAuthentication() {
+    try {
+      const response = await fetch(`${config.apiBase}/api/v1/auth/config`, {
+        headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15000)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const authConfig = await response.json();
+      state.authMode = authConfig.editor_auth_mode === 'network' ? 'network' : 'token';
+    } catch (error) {
+      console.warn('Live Edits authentication configuration unavailable:', error.message);
+    }
+    const networkMode = state.authMode === 'network';
+    ui['email-field'].classList.toggle('hidden', !networkMode);
+    ui['network-note'].classList.toggle('hidden', !networkMode);
+    ui['token-field'].classList.toggle('hidden', networkMode);
+    if (state.name && (networkMode ? state.email : state.token)) connect();
+    else showPanel('auth-panel');
+  }
+
+  initializeAuthentication();
 })();

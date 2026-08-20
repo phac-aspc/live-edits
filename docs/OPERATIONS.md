@@ -1,110 +1,68 @@
-# Operations guide
+# Day-to-day operations
 
-Run all commands from `/home/ec2-user/environment/tools/live-edits` on the EC2 Cloud9 host. Load `LIVE_EDITS_ADMIN_TOKEN` into the current shell first.
+Normal Live Edits work is performed in the admin console at:
 
-## Stage a project
+`https://en.infobase-dev.com/_live-edits/v4/admin/`
 
-English:
+The console is for the Health Infobase administration team. Program reviewers receive only a project preview link.
 
-```bash
-node scripts/setup-product.js \
-  --site en \
-  --source /home/ec2-user/environment/wwwroot/en/product-name
-```
+## Start a project
 
-French:
+1. Open the admin console while connected to the approved network or VPN.
+2. Sign in with your name and the separate admin-console passphrase.
+3. In **Add a project**, filter by product or locale.
+4. Confirm the product has the expected locale, path, and HTML page count.
+5. Select **Add to Live Edits**.
+6. Open the generated preview and confirm that the expected pages, assets, and Live Edits controls load.
+7. Use **Copy review link** and send only that link to the program team.
 
-```bash
-node scripts/setup-product.js \
-  --site fr \
-  --source /home/ec2-user/environment/wwwroot/fr/product-name
-```
+The product must be a top-level folder under the English or French web root and contain at least one HTML page. Folder names must use letters, numbers, dots, underscores, or hyphens. Private files, executable scripts, databases, logs, version-control data, and symbolic links are excluded or rejected during staging.
 
-The project name defaults to the source folder name. Use `--name` only when a different stable identifier is needed. The source must be inside the selected locale's document root.
+## Program-team review
 
-Setup performs these actions:
+The reviewer opens the preview and enters a name and email. These values are self-reported and recorded for activity attribution; they are not verified accounts. The reviewer can:
 
-1. Copies public site content to the shared staging root at `wwwroot/_live-edits/v4/products/SITE/PROJECT` while excluding common secret, key, database, log, VCS, dependency, backup, and server configuration files.
-2. Rejects symbolic links so a staged copy cannot escape its source boundary.
-3. Selects explicit `.editable` elements when present. Otherwise it selects safe, meaningful leaf content blocks under `<main>`, falling back to `<body>`.
-4. Assigns deterministic `data-live-edits-key` values and rejects nested or duplicate regions.
-5. Injects explicit API, locale, project, page, and widget settings into each staged page.
-6. Copies the current widget to the shared `/_live-edits/v4/widget/editor.js` path without touching an older Live Edits widget.
-7. Registers the locale specific project and exact page key manifests with Azure.
-8. Writes private state to `state/projects/SITE/PROJECT.json` in the tool checkout.
+* edit only the visibly keyed content regions;
+* save a new page revision;
+* add and resolve anchored comments;
+* view compatible revision history;
+* see who else is present on the page.
 
-If a preview already exists, setup stops. Re-run with `--force`; the old preview is first copied to the private `state/setup-backups/` folder.
+Reviewers cannot register, refresh, close, archive, or publish projects. If two people save the same block, the widget preserves the local version and reports the conflict instead of silently overwriting it.
 
-Use `--files` or `--subfolders` with comma separated relative paths for a deliberately limited preview. Use `--no-register` only when preparing files before Azure is available. A registered setup is required before browser editing.
+## Manage a current project
 
-## Choose editable regions explicitly
+The dashboard shows review state, registered page count, unpublished page count, unresolved comments, source state, last edit, and last publication. Available actions are:
 
-Automatic selection covers headings, paragraphs, list terms and items, captions, table cells, and block quotes. It skips forms, scripts, styles, templates, SVG, canvas, embeds, generated content, and anything marked with `data-live-edits-ignore`, `data-dynamic`, `data-generated`, `.dynamic-content`, or `.no-live-edits`.
+| Action | Effect |
+| --- | --- |
+| **Open preview** | Opens the staged, editable product. |
+| **Open live** | Opens the current source product served by the dev site. |
+| **Copy review link** | Copies the program-team preview URL. |
+| **Activity** | Shows recent saves, comments, and publications without exposing reviewer email addresses. |
+| **Refresh staging** | Backs up and rebuilds the preview from current source, then refreshes Azure page manifests. |
+| **Dry run** | Validates and displays the exact pending publication plan without writing files. |
+| **Publish** | Runs a fresh dry run, requires typed confirmation, writes validated content, creates backups, and records the audit event. |
+| **Close review** | Immediately blocks reviewer API access while preserving previews, revisions, comments, and backups. |
+| **Reopen review** | Allows reviewers to connect to the project again. |
 
-For precise control, add `class="editable"` to nonnested source elements before setup. Existing valid `data-live-edits-key` values are preserved. Do not place one editable element inside another.
+When the dashboard marks the source as **changed**, refresh staging and have the program team confirm or resave the affected page before publishing. Refreshing can make old edits structurally incompatible when the source page layout changed; the API intentionally excludes those stale revisions.
 
-## Review and save
+## Publish safely
 
-Open the preview URL printed by setup, such as:
+1. Resolve or consciously accept the outstanding comments.
+2. Select **Publish**.
+3. Review the automatically generated dry run.
+4. Confirm every listed page and revision belongs to this release.
+5. Enter the displayed project name exactly.
+6. Select **Publish changes**.
+7. Open the live dev link and verify the published content in context.
+8. Close review when the program team is finished.
 
-```text
-https://en.infobase-dev.com/_live-edits/v4/products/en/product-name/
-```
+Publishing changes only registered keyed fragments. It does not copy staged CSS, JavaScript, media, configuration, a whole page body, or the editor widget into the source product.
 
-Enter the reviewer name and shared editor access code. The code remains in browser `sessionStorage`, not persistent local storage.
+## Recovery
 
-Use Edit to enable keyed content, Save or Ctrl+S to save, Comment to view or add anchored notes, and History to restore an earlier compatible revision into the current unsaved page. Restoring history requires a new Save and never changes source files directly.
+The console intentionally does not provide delete or one-click restore controls. Publication backups are stored privately below `state/publish-backups/SITE/PROJECT/`. A release manager must compare a backup with the current source and record any rollback before restoring it. After a restore, refresh staging so the preview, source hashes, and page manifests agree.
 
-If another reviewer saves first, the API returns a revision conflict. The widget automatically merges blocks changed on only one side. If the same block changed on both sides, it keeps the local page visible and offers the server version rather than silently overwriting either editor.
-
-## Refresh a preview after source changes
-
-Re-run setup with `--force`. The source hashes, deterministic keys, and registered page manifests are refreshed. If page structure changed, older revisions with a different manifest are marked structurally stale and excluded from publishing. Open the refreshed preview and save a reviewed version against the new structure.
-
-## Publish
-
-Always review the dry run first:
-
-```bash
-node scripts/publish-product.js --site en --name product-name
-```
-
-Apply exactly that plan:
-
-```bash
-node scripts/publish-product.js --site en --name product-name --apply --published-by 'Release manager name'
-```
-
-For French, change `--site en` to `--site fr`.
-
-The publisher retrieves only the latest unpublished edit whose manifest matches the current setup. It validates every source boundary, page extension, baseline hash, key, sanitized fragment, and resulting HTML structure before writing any file. It then backs up each changed source file below `state/publish-backups/`, uses a temporary sibling for the replacement, updates private source hashes, and sends the exact page revisions to the API publish audit endpoint under an idempotent operation ID. A failed acknowledgement is saved in private project state and reconciled on the next run.
-
-No staged CSS, JavaScript, media, `.env`, database, configuration, or whole page body is copied back to source.
-
-## Source change conflict
-
-If source changed since setup, publish stops. The preferred response is:
-
-1. Inspect the source change.
-2. Re-run setup with `--force`.
-3. Review the refreshed preview and save again if needed.
-4. Run another dry run.
-
-`--allow-source-changes` is available only for a release manager who has inspected the concurrent source change. Key and HTML structure validation still applies.
-
-## Restore a file backup
-
-Publish reports the exact backup folder. To restore, first stop other publishing activity, compare the backup and current file, then copy the required backup file back to the corresponding source path. Re-run setup afterward so stored hashes and previews match the restored source.
-
-Restoring source files does not delete the API audit event or edit history. Record the operational rollback separately until a first class rollback command is implemented.
-
-## Common checks
-
-```bash
-node scripts/setup-product.js --site en --list
-node scripts/check-project.js
-curl -fsS https://test.infobase-dev.com/live-edits/healthz
-git status --short
-```
-
-Do not use `--apply`, `--force`, or `--allow-source-changes` from unattended automation without an approval and retained logs.
+The scripts in `scripts/` remain available for incident recovery when the admin service is unavailable. They are not the normal operating workflow; see [scripts/README.md](../scripts/README.md).

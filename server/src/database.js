@@ -38,6 +38,7 @@ function createSchema(db) {
       name TEXT NOT NULL,
       origin TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+      review_status TEXT NOT NULL DEFAULT 'open' CHECK (review_status IN ('open', 'closed')),
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       UNIQUE (site_key, project_path)
@@ -52,6 +53,7 @@ function createSchema(db) {
       payload TEXT NOT NULL,
       content_hash TEXT NOT NULL,
       edited_by TEXT NOT NULL,
+      edited_email TEXT,
       revision INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
       published_at INTEGER,
@@ -78,6 +80,7 @@ function createSchema(db) {
       offset_y REAL NOT NULL CHECK (offset_y BETWEEN 0 AND 1),
       comment_text TEXT NOT NULL,
       author TEXT NOT NULL,
+      author_email TEXT,
       resolved INTEGER NOT NULL DEFAULT 0 CHECK (resolved IN (0, 1)),
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
@@ -103,6 +106,15 @@ function createSchema(db) {
   `);
   if (!tableColumns(db, 'edits').includes('manifest_hash')) {
     db.exec("ALTER TABLE edits ADD COLUMN manifest_hash TEXT NOT NULL DEFAULT 'legacy'");
+  }
+  if (!tableColumns(db, 'projects').includes('review_status')) {
+    db.exec("ALTER TABLE projects ADD COLUMN review_status TEXT NOT NULL DEFAULT 'open' CHECK (review_status IN ('open', 'closed'))");
+  }
+  if (!tableColumns(db, 'edits').includes('edited_email')) {
+    db.exec('ALTER TABLE edits ADD COLUMN edited_email TEXT');
+  }
+  if (!tableColumns(db, 'comments').includes('author_email')) {
+    db.exec('ALTER TABLE comments ADD COLUMN author_email TEXT');
   }
   if (!tableColumns(db, 'publish_events').includes('operation_id')) {
     db.exec('ALTER TABLE publish_events ADD COLUMN operation_id TEXT');

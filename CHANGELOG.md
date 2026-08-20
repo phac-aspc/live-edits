@@ -1,5 +1,28 @@
 # Changelog
 
+## 4.1.0
+
+### Browser administration
+
+* Added a C9-hosted admin landing page that discovers eligible English and French product folders and lists current Live Edits projects.
+* Added one-click project setup and staging refresh, preview and live links, link copying, source-state checks, Azure health and work summaries, and recent activity.
+* Added open and closed review state. Closing review immediately blocks reviewer reads, writes, comments, and realtime joins without deleting project data.
+* Added publication dry runs and confirmed publication to the dashboard. The console runs a new dry run, requires typed project-name confirmation, preserves publisher attribution, and uses the existing validated backup-producing publisher.
+* Added a loopback-only C9 admin service, separate short-lived admin-console sessions, origin and CSRF enforcement, login throttling, serialized filesystem operations, a dedicated systemd unit, and a narrowly scoped Apache proxy configuration.
+
+### Reviewer access and audit
+
+* Added production `EDITOR_AUTH_MODE=network` so VPN-authorized reviewers enter only a self-reported name and email instead of receiving a shared editor token.
+* Retained `AUTH_MODE=token` and `ADMIN_TOKEN` for all administrative API operations, and retained editor token mode as a rollback option.
+* Added private normalized reviewer email attribution to edits and comments while deliberately omitting email from reviewer responses, history, comments, presence, and admin activity output.
+* Added project-summary counts and activity endpoints for administrators.
+
+### Documentation and quality
+
+* Replaced normal command-line operations with the admin-console workflow and retained the scripts only as a break-glass interface.
+* Added network-mode, review-closure, private-attribution, admin-session, CSRF, discovery, and end-to-end admin setup tests.
+* Documented Azure-first deployment order, network access gates, C9 installation without Git metadata, isolated rollback, and the unchanged English/French Apache mappings.
+
 ## 4.0.0
 
 ### Deployment and identity

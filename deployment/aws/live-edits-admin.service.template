@@ -1,0 +1,20 @@
+[Unit]
+Description=Health Infobase Live Edits C9 admin console
+After=network-online.target httpd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=apache
+WorkingDirectory=__REPOSITORY_ROOT__
+EnvironmentFile=/etc/live-edits/admin.env
+ExecStart=__NODE_PATH__ admin/server.js
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

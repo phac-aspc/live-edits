@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { REPO_ROOT } from './runtime.js';
 
-const roots = ['scripts', 'server/src', 'server/test', 'tests', 'widget'];
+const roots = ['admin', 'scripts', 'server/src', 'server/test', 'tests', 'widget'];
 const files = [];
 
 function visit(path) {
@@ -33,7 +33,8 @@ console.log(`Syntax checked ${files.length} JavaScript files.`);
 
 const shellScripts = [
   resolve(REPO_ROOT, 'deployment', 'aws', 'bootstrap-cloud9.sh'),
-  resolve(REPO_ROOT, 'deployment', 'aws', 'install-apache-config.sh')
+  resolve(REPO_ROOT, 'deployment', 'aws', 'install-apache-config.sh'),
+  resolve(REPO_ROOT, 'deployment', 'aws', 'install-admin-console.sh')
 ];
 const bashCheck = spawnSync('bash', ['--version'], { encoding: 'utf8' });
 if (bashCheck.status === 0) {

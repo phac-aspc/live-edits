@@ -1,12 +1,13 @@
-# Cloud9 commands
+# Break-glass Cloud9 commands
 
-Run commands from the repository root.
+The admin console is the normal interface for adding, refreshing, reviewing, and publishing projects. These commands are retained for recovery if that console is unavailable.
+
+Run from the tool directory with `LIVE_EDITS_ADMIN_TOKEN` exported only for the current shell:
 
 ```bash
-export LIVE_EDITS_ADMIN_TOKEN='the Azure ADMIN_TOKEN value'
 node scripts/setup-product.js --site en --source /home/ec2-user/environment/wwwroot/en/product-name
 node scripts/publish-product.js --site en --name product-name
-node scripts/publish-product.js --site en --name product-name --apply
+node scripts/publish-product.js --site en --name product-name --apply --published-by 'Release manager name'
 ```
 
-The first publish command is a dry run. Setup options and recovery procedures are documented in [../docs/OPERATIONS.md](../docs/OPERATIONS.md).
+Setup and forced refresh create private preview backups. Publishing is a dry run unless `--apply` is explicit. Recovery details are in [../docs/OPERATIONS.md](../docs/OPERATIONS.md).
